@@ -9,9 +9,18 @@
 # ──────────────────────────────────────────────────────────────────────────────
 import os, json, base64, io, re
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed   # FIX 2
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# FIX 4a — fail fast if API key is missing, before any imports try to use it
+if not os.getenv("GROQ_API_KEY"):
+    raise SystemExit(
+        "\n  ERROR: GROQ_API_KEY is missing.\n"
+        "  Add it to your .env file:\n"
+        "    GROQ_API_KEY=gsk_...\n"
+    )
 
 import dash
 from dash import dcc, html, Input, Output, State, no_update
@@ -28,6 +37,7 @@ try:
     from sentence_transformers import SentenceTransformer
     from sklearn.metrics.pairwise import cosine_similarity
     import numpy as np
+    print("  → Loading sentence-transformers model…")
     _ST_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
     SEMANTIC = True
 except Exception:
@@ -43,7 +53,7 @@ try:
 except Exception:
     REPORTLAB = False
 
-GROQ_CLIENT = Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+GROQ_CLIENT = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -112,8 +122,13 @@ CATALOG = [
     {"id":"LD04","title":"Cross-Functional Collaboration","skill":"Collaboration","domain":"Soft","level":"Beginner","duration_hrs":3,"prereqs":["LD01"]},
 ]
 
-CATALOG_BY_ID   = {c["id"]: c for c in CATALOG}
-CATALOG_SKILLS  = [c["skill"].lower() for c in CATALOG]   # index-aligned
+CATALOG_BY_ID  = {c["id"]: c for c in CATALOG}
+CATALOG_SKILLS = [c["skill"].lower() for c in CATALOG]   # index-aligned
+
+# FIX 4b — startup integrity check: catch broken prereq references immediately
+_bad_prereqs = [(c["id"], p) for c in CATALOG for p in c["prereqs"] if p not in CATALOG_BY_ID]
+if _bad_prereqs:
+    raise SystemExit(f"CATALOG ERROR — broken prereq references: {_bad_prereqs}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -170,7 +185,7 @@ def _groq(prompt: str, system: str = "You are an expert HR analyst. Always respo
             messages=[{"role": "system", "content": system},
                       {"role": "user",   "content": prompt}],
             temperature=0.1,
-            max_tokens=2000,
+            max_tokens=4096,   # FIX 4c — raised from 2000 to prevent mid-JSON truncation
         )
         raw = r.choices[0].message.content.strip()
         raw = re.sub(r"```json\s*|\s*```", "", raw).strip()
@@ -227,21 +242,36 @@ Return ONLY valid JSON: {{"reasoning": "<2 sentences>"}}"""
 # ──────────────────────────────────────────────────────────────────────────────
 # SECTION 6 · SEMANTIC SKILL MATCHING
 # ──────────────────────────────────────────────────────────────────────────────
+
+# FIX 1 — pre-compute catalog embeddings ONCE at startup, not on every call
+if SEMANTIC:
+    print("  → Pre-computing catalog embeddings…")
+    _CATALOG_EMBS = _ST_MODEL.encode(CATALOG_SKILLS)
+else:
+    _CATALOG_EMBS = None
+
+
 def _semantic_match(skill: str, threshold: float = 0.52) -> tuple[int, float]:
     """Return (catalog_index, similarity_score). Falls back to substring if no embeddings."""
-    sl = skill.lower()
+    # FIX 4d — normalise skill name before matching (React.js → React, Node.js → Node)
+    sl = (skill.lower()
+          .replace(".js", "").replace(".py", "").replace(".ts", "")
+          .replace("(", "").replace(")", "")
+          .strip())
+
     # 1. Exact / substring match (fast path)
     for i, cs in enumerate(CATALOG_SKILLS):
         if sl == cs or sl in cs or cs in sl:
             return i, 1.0
-    # 2. Embedding-based cosine similarity
-    if SEMANTIC:
-        emb_q  = _ST_MODEL.encode([sl])
-        emb_db = _ST_MODEL.encode(CATALOG_SKILLS)
-        sims   = cosine_similarity(emb_q, emb_db)[0]
-        best   = int(np.argmax(sims))
+
+    # 2. Embedding-based cosine similarity — uses pre-computed embeddings (FIX 1)
+    if SEMANTIC and _CATALOG_EMBS is not None:
+        emb_q = _ST_MODEL.encode([sl])
+        sims  = cosine_similarity(emb_q, _CATALOG_EMBS)[0]
+        best  = int(np.argmax(sims))
         if sims[best] >= threshold:
             return best, float(sims[best])
+
     # 3. Token overlap fallback
     tokens = set(sl.split())
     best_score, best_idx = 0.0, -1
@@ -264,7 +294,11 @@ def analyze_gap(resume_data: dict, jd_data: dict) -> list[dict]:
 
     gap_profile = []
     for skill, is_required in all_skills:
-        sl = skill.lower()
+        # FIX 4d — normalise before matching (mirrors _semantic_match normalisation)
+        sl = (skill.lower()
+              .replace(".js", "").replace(".py", "").replace(".ts", "")
+              .replace("(", "").replace(")", "")
+              .strip())
         status, proficiency, context = "Missing", 0, ""
 
         # Direct match
@@ -345,7 +379,7 @@ def generate_path(gap_profile: list[dict], resume_data: dict) -> list[dict]:
             pass
 
     # Topological sort over the induced subgraph
-    sub   = SKILL_GRAPH.subgraph(modules_needed)
+    sub = SKILL_GRAPH.subgraph(modules_needed)
     try:
         ordered = list(nx.topological_sort(sub))
     except nx.NetworkXUnfeasible:
@@ -387,19 +421,19 @@ def calculate_impact(gap_profile: list[dict], path: list[dict]) -> dict:
     partial = sum(1 for g in gap_profile if g["status"] == "Partial")
     covered = len({m["gap_skill"] for m in path})
 
-    roadmap_hrs  = sum(m["duration_hrs"] for m in path)
-    hours_saved  = max(0, STANDARD_ONBOARDING_HRS - roadmap_hrs)
-    readiness    = min(100, round(((known + covered) / max(total, 1)) * 100))
+    roadmap_hrs = sum(m["duration_hrs"] for m in path)
+    hours_saved = max(0, STANDARD_ONBOARDING_HRS - roadmap_hrs)
+    readiness   = min(100, round(((known + covered) / max(total, 1)) * 100))
 
     return {
-        "total_skills":      total,
-        "known_skills":      known,
-        "partial_skills":    partial,
-        "gaps_addressed":    covered,
-        "roadmap_hours":     roadmap_hrs,
-        "hours_saved":       hours_saved,
+        "total_skills":       total,
+        "known_skills":       known,
+        "partial_skills":     partial,
+        "gaps_addressed":     covered,
+        "roadmap_hours":      roadmap_hrs,
+        "hours_saved":        hours_saved,
         "role_readiness_pct": readiness,
-        "modules_count":     len(path),
+        "modules_count":      len(path),
     }
 
 
@@ -415,18 +449,18 @@ def radar_chart(gap_profile: list[dict]) -> go.Figure:
     items = gap_profile[:10]
     if not items:
         return go.Figure()
-    theta   = [g["skill"][:18] for g in items]
-    resume  = [g["proficiency"] for g in items]
-    jd_req  = [10] * len(items)
+    theta  = [g["skill"][:18] for g in items]
+    resume = [g["proficiency"] for g in items]
+    jd_req = [10] * len(items)
     fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(r=jd_req,    theta=theta, fill="toself",
+    fig.add_trace(go.Scatterpolar(r=jd_req, theta=theta, fill="toself",
                                   name="JD Requirement", line=dict(color="#FF6B6B", width=2), opacity=0.25))
-    fig.add_trace(go.Scatterpolar(r=resume,    theta=theta, fill="toself",
+    fig.add_trace(go.Scatterpolar(r=resume, theta=theta, fill="toself",
                                   name="Your Skills",    line=dict(color="#4ECDC4", width=2), opacity=0.65))
     fig.update_layout(
         polar=dict(
             bgcolor=_DARK_BG,
-            radialaxis=dict(visible=True, range=[0,10], gridcolor=_GRID_COLOR, color="#555"),
+            radialaxis=dict(visible=True, range=[0, 10], gridcolor=_GRID_COLOR, color="#555"),
             angularaxis=dict(gridcolor=_GRID_COLOR)
         ),
         paper_bgcolor=_DARK_BG, plot_bgcolor=_DARK_BG,
@@ -487,10 +521,10 @@ def build_pdf(resume_data, jd_data, gap_profile, path, impact) -> io.BytesIO:
     TEAL   = rl_colors.HexColor("#2A9D8F")
     DARK   = rl_colors.HexColor("#1A1A2E")
 
-    H1 = ParagraphStyle("H1", parent=styles["Title"],   fontSize=20, spaceAfter=4, textColor=TEAL)
-    H2 = ParagraphStyle("H2", parent=styles["Heading2"],fontSize=13, spaceAfter=6, textColor=DARK, spaceBefore=14)
-    BD = ParagraphStyle("BD", parent=styles["Normal"],  fontSize=10, spaceAfter=5)
-    IT = ParagraphStyle("IT", parent=styles["Normal"],  fontSize=9,  spaceAfter=4,
+    H1 = ParagraphStyle("H1", parent=styles["Title"],    fontSize=20, spaceAfter=4,  textColor=TEAL)
+    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=13, spaceAfter=6,  textColor=DARK, spaceBefore=14)
+    BD = ParagraphStyle("BD", parent=styles["Normal"],   fontSize=10, spaceAfter=5)
+    IT = ParagraphStyle("IT", parent=styles["Normal"],   fontSize=9,  spaceAfter=4,
                          leftIndent=18, textColor=rl_colors.HexColor("#555555"), italics=True)
 
     story = [
@@ -504,20 +538,20 @@ def build_pdf(resume_data, jd_data, gap_profile, path, impact) -> io.BytesIO:
     ]
 
     impact_rows = [
-        ["Role Readiness",  f"{impact['role_readiness_pct']}%"],
-        ["Skills Addressed",f"{impact['gaps_addressed']} / {impact['total_skills']}"],
-        ["Training Hours",  f"{impact['roadmap_hours']} hrs"],
-        ["Hours Saved",     f"~{impact['hours_saved']} hrs vs. standard onboarding"],
-        ["Modules",         str(impact["modules_count"])],
+        ["Role Readiness",   f"{impact['role_readiness_pct']}%"],
+        ["Skills Addressed", f"{impact['gaps_addressed']} / {impact['total_skills']}"],
+        ["Training Hours",   f"{impact['roadmap_hours']} hrs"],
+        ["Hours Saved",      f"~{impact['hours_saved']} hrs vs. standard onboarding"],
+        ["Modules",          str(impact["modules_count"])],
     ]
     tbl = Table([["Metric", "Value"]] + impact_rows, colWidths=[180, 260])
     tbl.setStyle(TableStyle([
-        ("BACKGROUND",   (0,0), (-1,0), TEAL),
-        ("TEXTCOLOR",    (0,0), (-1,0), rl_colors.white),
-        ("FONTSIZE",     (0,0), (-1,-1), 10),
-        ("GRID",         (0,0), (-1,-1), 0.4, rl_colors.grey),
-        ("ROWBACKGROUNDS",(0,1),(-1,-1), [rl_colors.whitesmoke, rl_colors.white]),
-        ("LEFTPADDING",  (0,0), (-1,-1), 8),
+        ("BACKGROUND",    (0, 0), (-1, 0), TEAL),
+        ("TEXTCOLOR",     (0, 0), (-1, 0), rl_colors.white),
+        ("FONTSIZE",      (0, 0), (-1, -1), 10),
+        ("GRID",          (0, 0), (-1, -1), 0.4, rl_colors.grey),
+        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [rl_colors.whitesmoke, rl_colors.white]),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 8),
     ]))
     story += [tbl, Spacer(1, 18), Paragraph("Personalized Learning Roadmap", H2)]
 
@@ -527,20 +561,19 @@ def build_pdf(resume_data, jd_data, gap_profile, path, impact) -> io.BytesIO:
         if m.get("reasoning"):
             story.append(Paragraph(f"↳ {m['reasoning']}", IT))
 
-    story += [Spacer(1, 16),
-              Paragraph("Skill Gap Overview", H2)]
+    story += [Spacer(1, 16), Paragraph("Skill Gap Overview", H2)]
     gap_rows = [["Skill", "Status", "Proficiency", "Type"]]
     for g in gap_profile:
         gap_rows.append([g["skill"], g["status"], f"{g['proficiency']}/10",
                          "Required" if g["is_required"] else "Preferred"])
     gt = Table(gap_rows, colWidths=[160, 70, 80, 80])
     gt.setStyle(TableStyle([
-        ("BACKGROUND",    (0,0), (-1,0), DARK),
-        ("TEXTCOLOR",     (0,0), (-1,0), rl_colors.white),
-        ("FONTSIZE",      (0,0), (-1,-1), 9),
-        ("GRID",          (0,0), (-1,-1), 0.3, rl_colors.grey),
-        ("ROWBACKGROUNDS",(0,1),(-1,-1), [rl_colors.whitesmoke, rl_colors.white]),
-        ("LEFTPADDING",   (0,0), (-1,-1), 6),
+        ("BACKGROUND",    (0, 0), (-1, 0), DARK),
+        ("TEXTCOLOR",     (0, 0), (-1, 0), rl_colors.white),
+        ("FONTSIZE",      (0, 0), (-1, -1), 9),
+        ("GRID",          (0, 0), (-1, -1), 0.3, rl_colors.grey),
+        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [rl_colors.whitesmoke, rl_colors.white]),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
     ]))
     story.append(gt)
     doc.build(story)
@@ -857,45 +890,79 @@ def cb_jd(contents, filename):
     return f"✓ {filename}", {"text": parse_upload(contents, filename), "filename": filename}
 
 
+# FIX 3 — clientside spinner: show on btn click, hide when results arrive
+app.clientside_callback(
+    """
+    function(n_clicks, results_data) {
+        const ctx = window.dash_clientside.callback_context;
+        if (!ctx || !ctx.triggered || ctx.triggered.length === 0) {
+            return {display: 'none'};
+        }
+        const prop_id = ctx.triggered[0].prop_id;
+        if (prop_id === 'btn-run.n_clicks' && n_clicks > 0) {
+            return {display: 'flex'};
+        }
+        // Hide spinner once results land (s-results.data update)
+        return {display: 'none'};
+    }
+    """,
+    Output("spinner", "style"),
+    Input("btn-run", "n_clicks"),
+    Input("s-results", "data"),
+    prevent_initial_call=True,
+)
+
+
 @app.callback(
-    Output("s-results","data"),
-    Output("results-wrap","style"),
-    Output("run-err","children"),
-    Input("btn-run","n_clicks"),
-    State("s-resume","data"),
-    State("s-jd","data"),
-    State("jd-paste","value"),
+    Output("s-results", "data"),
+    Output("results-wrap", "style"),
+    Output("run-err", "children"),
+    Input("btn-run", "n_clicks"),
+    State("s-resume", "data"),
+    State("s-jd", "data"),
+    State("jd-paste", "value"),
     prevent_initial_call=True,
 )
 def cb_run(n, resume_store, jd_store, jd_paste):
     if not n:
         raise PreventUpdate
 
-    resume_text   = (resume_store or {}).get("text","")
-    jd_text_final = (jd_store or {}).get("text","") or jd_paste or ""
+    resume_text   = (resume_store or {}).get("text", "")
+    jd_text_final = (jd_store or {}).get("text", "") or jd_paste or ""
 
     if not resume_text:
-        return no_update, {"display":"none"}, "⚠ Upload a resume first."
+        return no_update, {"display": "none"}, "⚠ Upload a resume first."
     if not jd_text_final:
-        return no_update, {"display":"none"}, "⚠ Upload or paste a job description."
-    if not os.getenv("GROQ_API_KEY"):
-        return no_update, {"display":"none"}, "⚠ GROQ_API_KEY missing from .env"
+        return no_update, {"display": "none"}, "⚠ Upload or paste a job description."
 
     resume_data = parse_resume(resume_text)
     jd_data     = parse_jd(jd_text_final)
 
     if "error" in resume_data:
-        return no_update, {"display":"none"}, f"⚠ {resume_data['error']}"
+        return no_update, {"display": "none"}, f"⚠ {resume_data['error']}"
     if "error" in jd_data:
-        return no_update, {"display":"none"}, f"⚠ {jd_data['error']}"
+        return no_update, {"display": "none"}, f"⚠ {jd_data['error']}"
 
     gap_profile = analyze_gap(resume_data, jd_data)
     path        = generate_path(gap_profile, resume_data)
 
-    # Reasoning traces (first 12 modules for speed)
-    cname = resume_data.get("name","the candidate")
-    for m in path[:12]:
-        m["reasoning"] = generate_reasoning(m, m["gap_skill"], cname)
+    # FIX 2 — parallel reasoning traces via ThreadPoolExecutor (~4× faster)
+    cname  = resume_data.get("name", "the candidate")
+    subset = path[:12]
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        future_to_idx = {
+            ex.submit(generate_reasoning, m, m["gap_skill"], cname): i
+            for i, m in enumerate(subset)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                subset[idx]["reasoning"] = future.result()
+            except Exception:
+                subset[idx]["reasoning"] = (
+                    f"Addresses the identified gap in {subset[idx]['gap_skill']}, "
+                    "critical for the target role."
+                )
 
     impact = calculate_impact(gap_profile, path)
 
@@ -908,9 +975,9 @@ def cb_run(n, resume_store, jd_store, jd_paste):
 
 
 @app.callback(
-    Output("tab-body","children"),
-    Input("tabs","active_tab"),
-    State("s-results","data"),
+    Output("tab-body", "children"),
+    Input("tabs", "active_tab"),
+    State("s-results", "data"),
     prevent_initial_call=True,
 )
 def cb_tabs(tab, results):
@@ -921,9 +988,9 @@ def cb_tabs(tab, results):
 
     # ── TAB: SKILL GAP ───────────────────────────────────────────────────────
     if tab == "tab-gap":
-        known   = [g for g in gp if g["status"]=="Known"]
-        partial = [g for g in gp if g["status"]=="Partial"]
-        missing = [g for g in gp if g["status"]=="Missing"]
+        known   = [g for g in gp if g["status"] == "Known"]
+        partial = [g for g in gp if g["status"] == "Partial"]
+        missing = [g for g in gp if g["status"] == "Missing"]
 
         def skill_row(g):
             cls = {"Known":"badge-known","Partial":"badge-partial","Missing":"badge-missing"}[g["status"]]
@@ -957,25 +1024,25 @@ def cb_tabs(tab, results):
             dbc.Col([
                 html.Div([
                     html.P("Candidate", className="section-h", style={"marginBottom":"12px"}),
-                    *[html.Div([html.Span(k,className="prof-key"),
-                                html.Span(str(v),className="prof-val")], className="prof-row")
-                      for k,v in [("Name",rd.get("name","—")),
-                                  ("Role",rd.get("current_role","—")),
-                                  ("Seniority",rd.get("seniority","—")),
-                                  ("Experience",f"{rd.get('years_experience','—')} yrs"),
-                                  ("Domain",rd.get("domain","—"))]],
+                    *[html.Div([html.Span(k, className="prof-key"),
+                                html.Span(str(v), className="prof-val")], className="prof-row")
+                      for k, v in [("Name",       rd.get("name","—")),
+                                   ("Role",        rd.get("current_role","—")),
+                                   ("Seniority",   rd.get("seniority","—")),
+                                   ("Experience",  f"{rd.get('years_experience','—')} yrs"),
+                                   ("Domain",      rd.get("domain","—"))]],
                 ], className="glass-card"),
             ], md=4),
             dbc.Col([
                 html.Div([
                     html.P("Target Role", className="section-h", style={"marginBottom":"12px"}),
-                    *[html.Div([html.Span(k,className="prof-key"),
-                                html.Span(str(v),className="prof-val")], className="prof-row")
-                      for k,v in [("Title",jd.get("role_title","—")),
-                                  ("Seniority",jd.get("seniority_required","—")),
-                                  ("Domain",jd.get("domain","—")),
-                                  ("Required",len(jd.get("required_skills",[]))),
-                                  ("Preferred",len(jd.get("preferred_skills",[])))]]
+                    *[html.Div([html.Span(k, className="prof-key"),
+                                html.Span(str(v), className="prof-val")], className="prof-row")
+                      for k, v in [("Title",     jd.get("role_title","—")),
+                                   ("Seniority", jd.get("seniority_required","—")),
+                                   ("Domain",    jd.get("domain","—")),
+                                   ("Required",  len(jd.get("required_skills",[]))),
+                                   ("Preferred", len(jd.get("preferred_skills",[])))]]
                 ], className="glass-card"),
             ], md=4),
             dbc.Col([
@@ -986,9 +1053,9 @@ def cb_tabs(tab, results):
                                                   "fontWeight":"700","fontSize":"1.5rem","color":col}),
                         html.Span(f"  {lbl}", style={"color":"#3D4F6B","fontSize":".85rem"}),
                       ], style={"marginBottom":"10px"})
-                      for n,col,lbl in [(len(known),"#4ECDC4","Known"),
-                                        (len(partial),"#FFE66D","Partial"),
-                                        (len(missing),"#FF6B6B","Missing")]]
+                      for n, col, lbl in [(len(known),   "#4ECDC4", "Known"),
+                                          (len(partial), "#FFE66D", "Partial"),
+                                          (len(missing), "#FF6B6B", "Missing")]]
                 ], className="glass-card"),
             ], md=4),
         ], className="g-3")
@@ -998,8 +1065,8 @@ def cb_tabs(tab, results):
         lc = {"Beginner":"#4ECDC4","Intermediate":"#FFE66D","Advanced":"#FF6B6B"}
 
         def mod_card(i, m):
-            col  = lc.get(m["level"],"#888")
-            xtra = " adv" if m["level"]=="Advanced" else " int" if m["level"]=="Intermediate" else ""
+            col  = lc.get(m["level"], "#888")
+            xtra = " adv" if m["level"] == "Advanced" else " int" if m["level"] == "Intermediate" else ""
             return html.Div([
                 html.Div([
                     html.Span(f"#{i+1}",
@@ -1009,7 +1076,7 @@ def cb_tabs(tab, results):
                     html.Span(m["level"],
                               style={"marginLeft":"auto","fontSize":".68rem","color":col,
                                      "border":f"1px solid {col}40","borderRadius":"4px",
-                                     "padding":"2px 8px","background":f"rgba(255,255,255,.04)"}),
+                                     "padding":"2px 8px","background":"rgba(255,255,255,.04)"}),
                     html.Span(f"{m['duration_hrs']}h",
                               style={"fontFamily":"JetBrains Mono,monospace","fontSize":".72rem",
                                      "color":"#3D4F6B","marginLeft":"10px"}),
@@ -1025,14 +1092,14 @@ def cb_tabs(tab, results):
                 html.Div([
                     html.P("Impact Summary", className="section-h", style={"marginBottom":"18px"}),
                     dbc.Row([
-                        dbc.Col([html.Div(f"{im['role_readiness_pct']}%",className="impact-num"),
-                                 html.Div("Role Readiness",className="impact-lbl")],className="text-center"),
-                        dbc.Col([html.Div(f"~{im['hours_saved']}h",className="impact-num"),
-                                 html.Div("Hours Saved",className="impact-lbl")],className="text-center"),
-                        dbc.Col([html.Div(f"{im['roadmap_hours']}h",className="impact-num"),
-                                 html.Div("Training Time",className="impact-lbl")],className="text-center"),
-                        dbc.Col([html.Div(str(im["modules_count"]),className="impact-num"),
-                                 html.Div("Modules",className="impact-lbl")],className="text-center"),
+                        dbc.Col([html.Div(f"{im['role_readiness_pct']}%", className="impact-num"),
+                                 html.Div("Role Readiness", className="impact-lbl")], className="text-center"),
+                        dbc.Col([html.Div(f"~{im['hours_saved']}h", className="impact-num"),
+                                 html.Div("Hours Saved", className="impact-lbl")], className="text-center"),
+                        dbc.Col([html.Div(f"{im['roadmap_hours']}h", className="impact-num"),
+                                 html.Div("Training Time", className="impact-lbl")], className="text-center"),
+                        dbc.Col([html.Div(str(im["modules_count"]), className="impact-num"),
+                                 html.Div("Modules", className="impact-lbl")], className="text-center"),
                     ], className="g-2"),
                     html.Div(style={"height":"14px"}),
                     html.Div("Skill Coverage", style={"fontSize":".72rem","color":"#3D4F6B","marginBottom":"5px"}),
@@ -1092,13 +1159,13 @@ def cb_tabs(tab, results):
                             html.Span(str(v), style={"fontSize":".82rem","color":"#C9D1D9",
                                                       "marginLeft":"4px","fontWeight":"500"}),
                         ], style={"marginBottom":"7px"})
-                          for k,v in [
-                            ("Candidate:", rd.get("name","—")),
-                            ("Role:", jd.get("role_title","—")),
+                          for k, v in [
+                            ("Candidate:",      rd.get("name","—")),
+                            ("Role:",           jd.get("role_title","—")),
                             ("Role Readiness:", f"{im['role_readiness_pct']}%"),
-                            ("Modules:", im["modules_count"]),
+                            ("Modules:",        im["modules_count"]),
                             ("Training Hours:", f"{im['roadmap_hours']}h"),
-                            ("Hours Saved:", f"~{im['hours_saved']}h"),
+                            ("Hours Saved:",    f"~{im['hours_saved']}h"),
                           ]]
                     ], style={"background":"rgba(78,205,196,.05)",
                                "border":"1px solid rgba(78,205,196,.15)",
@@ -1124,10 +1191,10 @@ def cb_tabs(tab, results):
 
 
 @app.callback(
-    Output("dl-pdf","data"),
-    Output("pdf-status","children"),
-    Input("btn-pdf","n_clicks"),
-    State("s-results","data"),
+    Output("dl-pdf", "data"),
+    Output("pdf-status", "children"),
+    Input("btn-pdf", "n_clicks"),
+    State("s-results", "data"),
     prevent_initial_call=True,
 )
 def cb_pdf(n, results):
@@ -1137,7 +1204,7 @@ def cb_pdf(n, results):
         return no_update, "⚠ Install reportlab: pip install reportlab"
     buf  = build_pdf(results["resume_data"], results["jd_data"],
                      results["gap_profile"], results["path"], results["impact"])
-    name = results["resume_data"].get("name","candidate").replace(" ","_")
+    name = results["resume_data"].get("name", "candidate").replace(" ", "_")
     fn   = f"skillforge_roadmap_{name}_{datetime.now().strftime('%Y%m%d')}.pdf"
     return dcc.send_bytes(buf.read(), fn), f"✓ Downloading {fn}"
 

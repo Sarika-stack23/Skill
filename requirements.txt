@@ -1,0 +1,11 @@
+dash
+dash-bootstrap-components
+plotly
+groq
+pdfplumber
+python-docx
+python-dotenv
+reportlab
+sentence-transformers
+networkx
+scikit-learn
