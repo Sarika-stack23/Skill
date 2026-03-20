@@ -38,12 +38,19 @@ except Exception:
 # =============================================================================
 #  WEB SEARCH
 # =============================================================================
+_DDG_ERROR: str = ""   # surfaced to UI when search fails
+
 def ddg_search(query: str, max_results: int = 5) -> List[dict]:
+    global _DDG_ERROR
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
             return list(ddgs.text(query, max_results=max_results))
-    except Exception:
+    except ImportError:
+        _DDG_ERROR = "duckduckgo-search not installed — run `pip install duckduckgo-search`"
+        return []
+    except Exception as e:
+        _DDG_ERROR = f"Web search unavailable: {e}"
         return []
 
 # =============================================================================
@@ -70,7 +77,7 @@ if not _GROQ_KEY:
     st.stop()
 
 GROQ_CLIENT  = Groq(api_key=_GROQ_KEY)
-MODEL_FAST   = "meta-llama/llama-4-scout-17b-16e-instruct"
+MODEL_FAST   = "llama-3.3-70b-versatile"
 CURRENT_YEAR = datetime.now().year
 
 # =============================================================================
@@ -163,7 +170,6 @@ TRANSFER_MAP: Dict[str, Dict[str, int]] = {
 }
 SENIORITY_MAP = {"Junior":0,"Mid":1,"Senior":2,"Lead":3}
 
-# Scenarios — no fake computed stats; those are calculated after analysis
 SAMPLES = {
     "junior_swe": {
         "label": "Junior SWE → Full Stack",
@@ -589,7 +595,14 @@ def weeks_ready(hrs, hpd):
 #  FULL PIPELINE
 # =============================================================================
 def run_analysis(resume_text, jd_text, resume_image_b64=None):
-    cache_k = resume_text or "img"
+    # Use a content-based key: hash the image bytes if resume text is empty,
+    # so two different image resumes don't collide in cache.
+    if resume_text:
+        cache_k = resume_text
+    elif resume_image_b64:
+        cache_k = "img:" + hashlib.md5(resume_image_b64.encode()).hexdigest()
+    else:
+        cache_k = "img"
     cached = cache_get(cache_k, jd_text)
     if cached: cached["_cache_hit"] = True; return cached
     kws = [w.strip() for w in jd_text.split() if len(w)>3][:20]
@@ -1187,7 +1200,7 @@ def _init_state():
         "resume_image":   None,
         "jd_text":        "",
         "result":         None,
-        "completed":      set(),
+        "completed":      [],
         "hpd":            2,
         "rw_result":      None,
         "course_cache":   {},
@@ -1222,7 +1235,7 @@ def render_topbar():
     <div class="sf-top">
       <div class="sf-logo">Skill<em>Forge</em></div>
       <div class="sf-top-right">
-        <span class="sf-chip on">Groq LLaMA 4-Scout</span>
+        <span class="sf-chip on">Groq LLaMA 3.3-70b</span>
         <span class="sf-chip">NetworkX DAG</span>
         <span class="sf-chip">{sem}</span>
         <span class="sf-chip">{calls} calls · ${cost:.4f}</span>
@@ -1258,7 +1271,7 @@ def render_input():
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    # ── FIX: derive ready flags from raw widget state OR synced state ─────────
+    # Compute ready flags from synced state
     resume_ready = bool(
         st.session_state.get("resume_text","").strip() or
         st.session_state.get("res_paste","").strip() or
@@ -1276,7 +1289,7 @@ def render_input():
         ready_badge = '<span class="sf-ready-badge">✓ Ready</span>' if resume_ready else ''
         st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">📄</span> Your resume {ready_badge}</div>', unsafe_allow_html=True)
 
-        r_tab_up, r_tab_paste = st.tabs(["Upload file", "Paste text"])
+        r_tab_up, r_tab_paste = st.tabs(["📄 Upload Resume", "✏️ Paste Resume"])
         with r_tab_up:
             rf = st.file_uploader("Resume file", type=["pdf","docx","jpg","jpeg","png","webp"],
                                   key="res_file", label_visibility="collapsed")
@@ -1289,10 +1302,10 @@ def render_input():
                 st.success(f"✓ {rf.name} — {wc} words" if wc else f"✓ {rf.name} (image)")
 
         with r_tab_paste:
+            # Pre-populate only on first render of this key
             if "res_paste" not in st.session_state:
                 st.session_state["res_paste"] = st.session_state.get("resume_text","")
 
-            # ── FIX: use on_change callback instead of post-widget mutation ──
             def _sync_resume():
                 st.session_state["resume_text"] = st.session_state.get("res_paste","")
 
@@ -1319,7 +1332,7 @@ def render_input():
         ready_badge_jd = '<span class="sf-ready-badge">✓ Ready</span>' if jd_ready else ''
         st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">💼</span> Job description {ready_badge_jd}</div>', unsafe_allow_html=True)
 
-        j_tab_up, j_tab_paste = st.tabs(["Upload file", "Paste text"])
+        j_tab_up, j_tab_paste = st.tabs(["📤 Upload JD", "📝 Paste JD"])
         with j_tab_up:
             jf = st.file_uploader("JD file", type=["pdf","docx"], key="jd_file",
                                   label_visibility="collapsed")
@@ -1330,10 +1343,10 @@ def render_input():
                 st.success(f"✓ {jf.name} — {len(txt2.split())} words")
 
         with j_tab_paste:
+            # Pre-populate only on first render of this key
             if "jd_paste" not in st.session_state:
                 st.session_state["jd_paste"] = st.session_state.get("jd_text","")
 
-            # ── FIX: use on_change callback instead of post-widget mutation ──
             def _sync_jd():
                 st.session_state["jd_text"] = st.session_state.get("jd_paste","")
 
@@ -1350,16 +1363,16 @@ def render_input():
 
     opt1, opt2, _, btn_col = st.columns([1, 1.2, 0.6, 1.6])
     with opt1:
-        loc = st.selectbox("Salary location",
-                           ["India","USA","UK","Germany","Canada","Singapore"],
-                           key="loc_sel", label_visibility="visible",
-                           index=["India","USA","UK","Germany","Canada","Singapore"].index(
-                               st.session_state.get("sal_location","India")))
-        st.session_state["sal_location"] = loc
+        # FIX: use key="sal_location" directly so session state stays in sync
+        loc_options = ["India","USA","UK","Germany","Canada","Singapore"]
+        loc_idx = loc_options.index(st.session_state.get("sal_location","India"))
+        loc = st.selectbox("Salary location", loc_options, index=loc_idx,
+                           key="sal_location", label_visibility="visible")
+
     with opt2:
-        st.checkbox("Force fresh analysis (skip cache)", key="force_fresh",
-                    value=st.session_state.get("force_fresh",False))
-        st.session_state["force_fresh"] = st.session_state.get("force_fresh",False)
+        # FIX: removed value= and removed the post-widget session state assignment
+        # key="force_fresh" automatically syncs to st.session_state["force_fresh"]
+        st.checkbox("Force fresh analysis (skip cache)", key="force_fresh")
 
     with btn_col:
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -1394,18 +1407,22 @@ def render_loading():
 
     # Bust cache if requested
     if st.session_state.get("force_fresh"):
-        rtxt = st.session_state.get("resume_text","") or "img"
+        rtxt = st.session_state.get("resume_text","")
+        rimg = st.session_state.get("resume_image","")
+        if not rtxt and rimg:
+            rtxt = "img:" + hashlib.md5((rimg or "").encode()).hexdigest()
+        elif not rtxt:
+            rtxt = "img"
         jtxt = st.session_state.get("jd_text","")
         try:
             with shelve.open(_CACHE_PATH) as db:
                 k = _ckey(rtxt, jtxt)
                 if k in db: del db[k]
         except: pass
-        st.session_state["force_fresh"] = False
+        st.session_state.pop("force_fresh", None)
 
     with st.status("Analyzing your profile…", expanded=True) as status:
         st.write("📄 Parsing resume and job description")
-        # ── FIX: fall back to raw widget values if synced state is empty ─────
         resume_text = (
             st.session_state.get("resume_text","") or
             st.session_state.get("res_paste","")
@@ -1540,39 +1557,45 @@ def render_tab_overview(res):
                     (filt=="Known"         and g["status"]=="Known") or
                     (filt=="Required only" and g["is_required"])]
 
-        st.markdown('<div class="sf-skill-grid">', unsafe_allow_html=True)
+        # FIX: build ALL card HTML in one string then render once
+        # Previously the loop incorrectly opened/closed the grid div on every iteration,
+        # meaning each card was its own grid and CSS grid layout never applied.
+        cards_html = '<div class="sf-skill-grid">'
         for g in filtered:
-            st.markdown("</div>", unsafe_allow_html=True)
-            st.markdown('<div class="sf-skill-grid">', unsafe_allow_html=True)
-
             s    = g["status"]
-            col  = {"Known":_TEAL,"Partial":_AMBER,"Missing":_RED}[s]
-            bc   = {"Known":"sf-st-known","Partial":"sf-st-partial","Missing":"sf-st-missing"}[s]
-            cls  = s.lower()
-            pct  = g["proficiency"]/10*100
-            req  = "★ " if g["is_required"] else ""
-            trend= trends.get(g["skill"],"")
-            tc   = (_RED if "Hot" in trend else _AMBER if "Growing" in trend else "#3d4d66")
-            decay= '<span class="sf-decay-tag">⏱ decayed</span>' if g.get("decayed") else ""
-            ctx  = f'<div class="sf-skill-ctx">{g["context"]}</div>' if g.get("context") else ""
-            co   = g.get("catalog_course")
-            course_txt = f'<div style="font-family:var(--mono);font-size:0.65rem;color:var(--t3);margin-top:5px">📚 {co["title"]} · {co["duration_hrs"]}h · {co["level"]}</div>' if co else ""
-
-            st.markdown(f"""
+            col_map  = {"Known":_TEAL,"Partial":_AMBER,"Missing":_RED}
+            bc_map   = {"Known":"sf-st-known","Partial":"sf-st-partial","Missing":"sf-st-missing"}
+            col_c    = col_map[s]
+            bc       = bc_map[s]
+            cls      = s.lower()
+            pct      = g["proficiency"]/10*100
+            req      = "★ " if g["is_required"] else ""
+            trend    = trends.get(g["skill"],"")
+            tc       = (_RED if "Hot" in trend else _AMBER if "Growing" in trend else "#3d4d66")
+            decay    = '<span class="sf-decay-tag">⏱ decayed</span>' if g.get("decayed") else ""
+            ctx      = f'<div class="sf-skill-ctx">{g["context"]}</div>' if g.get("context") else ""
+            co       = g.get("catalog_course")
+            course_txt = (
+                f'<div style="font-family:var(--mono);font-size:0.65rem;color:var(--t3);margin-top:5px">'
+                f'📚 {co["title"]} · {co["duration_hrs"]}h · {co["level"]}</div>'
+            ) if co else ""
+            cards_html += f"""
             <div class="sf-skill-card {cls}">
               <div class="sf-skill-top">
                 <div class="sf-skill-name">{req}{g['skill']}</div>
                 <span class="sf-st-badge {bc}">{s}</span>
               </div>
-              <div class="sf-skill-bar"><div class="sf-skill-fill sf-skill-bar-fill" style="width:{pct}%;background:{col}"></div></div>
+              <div class="sf-skill-bar">
+                <div class="sf-skill-bar-fill" style="width:{pct}%;background:{col_c}"></div>
+              </div>
               <div class="sf-skill-bottom">
                 <span class="sf-skill-score">{g['proficiency']}/10</span>
                 <span class="sf-skill-demand" style="color:{tc}">{trend}</span>
               </div>
               {decay}{ctx}{course_txt}
-            </div>""", unsafe_allow_html=True)
-
-        st.markdown("</div>", unsafe_allow_html=True)
+            </div>"""
+        cards_html += '</div>'
+        st.markdown(cards_html, unsafe_allow_html=True)
 
         obs = res.get("obsolescence",[])
         if obs:
@@ -1591,7 +1614,6 @@ def render_tab_overview(res):
                 st.markdown(f'<div class="sf-xfer"><span class="sf-xfer-pct">↗{t["transfer_pct"]}%</span><span>{t["label"]}</span></div>', unsafe_allow_html=True)
 
         if sal and sal.get("median_lpa",0):
-            curr = sal.get("currency","INR"); sym = "₹" if curr=="INR" else "$"; unit="L/yr" if curr=="INR" else "k/yr"
             st.markdown(f'<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin:16px 0 4px">Live salary — {res["jd"].get("role_title","")[:24]}</div>', unsafe_allow_html=True)
             st.plotly_chart(salary_chart(sal), use_container_width=True, config={"displayModeBar":False})
             st.caption(f"Source: {sal.get('source','web')} · {sal.get('note','')}")
@@ -1602,7 +1624,7 @@ def render_tab_overview(res):
 def render_tab_roadmap(res):
     path      = res["path"]
     gp        = res["gap_profile"]
-    completed = st.session_state.get("completed", set())
+    completed = set(st.session_state.get("completed", []))
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
@@ -1611,10 +1633,11 @@ def render_tab_roadmap(res):
         st.markdown('<div class="sf-sh">Learning roadmap</div>', unsafe_allow_html=True)
         st.markdown('<div class="sf-ss">Dependency-ordered · critical path highlighted · check modules off as you complete them</div>', unsafe_allow_html=True)
     with hd_r:
+        # FIX: key="hpd_s" is different from "hpd", so writing st.session_state["hpd"] after is safe
         hpd = st.select_slider("Pace (h/day)", options=[1,2,4,8],
                                value=st.session_state.get("hpd",2), key="hpd_s",
                                label_visibility="visible")
-        st.session_state["hpd"] = hpd
+        st.session_state["hpd"] = hpd  # safe: different key than widget's "hpd_s"
         rem = sum(m["duration_hrs"] for m in path if m["id"] not in completed)
         st.markdown(f'<p style="font-family:var(--mono);font-size:0.72rem;color:var(--t2);text-align:right">{rem}h left · done in <strong style="color:var(--teal)">{weeks_ready(rem,hpd)}</strong></p>', unsafe_allow_html=True)
 
@@ -1646,7 +1669,7 @@ def render_tab_roadmap(res):
                 )
                 if chk: completed.add(m["id"])
                 else:    completed.discard(m["id"])
-                st.session_state["completed"] = completed
+                st.session_state["completed"] = list(completed)
 
                 prereqs_txt = ", ".join(m.get("prereqs",[]) or []) or "none"
                 tags = []
@@ -1752,6 +1775,8 @@ def render_tab_research(res):
             st.session_state["search_results"] = ddg_search(st.session_state["search_query"], max_results=8)
 
     results = st.session_state.get("search_results",[])
+    if _DDG_ERROR:
+        st.warning(f"⚠ {_DDG_ERROR}")
     if results:
         st.markdown(f'<div style="font-family:var(--mono);font-size:0.68rem;color:var(--t3);margin:10px 0 8px">{len(results)} results for "{st.session_state.get("search_query","")}"</div>', unsafe_allow_html=True)
         for r in results:
@@ -1836,11 +1861,11 @@ def render_tab_research(res):
 #  TAB 4 — ATS & EXPORT
 # =============================================================================
 def render_tab_ats_export(res):
-    c   = res["candidate"]; jd = res["jd"]
-    gp  = res["gap_profile"]; pt = res["path"]
-    im  = res["impact"];     ql = res.get("quality",{})
-    iv  = res.get("interview",{})
-    sm  = res.get("seniority",{}); cgm = res.get("career_months",0)
+    c    = res["candidate"]; jd = res["jd"]
+    gp   = res["gap_profile"]; roadmap = res["path"]
+    im   = res["impact"];    ql = res.get("quality",{})
+    iv   = res.get("interview",{})
+    sm   = res.get("seniority",{}); cgm = res.get("career_months",0)
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
@@ -1865,8 +1890,9 @@ def render_tab_ats_export(res):
             st.markdown(f'<div class="sf-tip"><span class="sf-tip-n">0{i+1}</span><span>{tip}</span></div>', unsafe_allow_html=True)
 
         st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin:16px 0 8px">Interview talking points</div>', unsafe_allow_html=True)
-        for pt_txt in (ql.get("interview_talking_points") or [])[:4]:
-            st.markdown(f'<div class="sf-talk">→ {pt_txt}</div>', unsafe_allow_html=True)
+        # FIX: renamed loop variable from pt_txt (which shadowed nothing, but was confusing)
+        for talking_pt in (ql.get("interview_talking_points") or [])[:4]:
+            st.markdown(f'<div class="sf-talk">→ {talking_pt}</div>', unsafe_allow_html=True)
 
     with right:
         st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin-bottom:8px">ATS issues</div>', unsafe_allow_html=True)
@@ -1898,7 +1924,7 @@ def render_tab_ats_export(res):
         st.info("Resume text required for rewrite (not available for image uploads).")
     else:
         if st.button("Generate rewrite →", key="gen_rw"):
-            with st.spinner("Rewriting with LLaMA 4-Scout…"):
+            with st.spinner("Rewriting with LLaMA 3.3-70b…"):
                 rw = rewrite_resume(rtxt, jd, kws)
             st.session_state["rw_result"] = rw
 
@@ -1912,7 +1938,8 @@ def render_tab_ats_export(res):
                 st.markdown('<div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--teal);margin-bottom:6px">Rewritten ✓</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="sf-diff">{rw[:1400]}</div>', unsafe_allow_html=True)
             st.download_button("⬇ Download rewritten resume", data=rw,
-                               file_name="skillforge_rewritten.txt", mime="text/plain")
+                               file_name="skillforge_rewritten.txt", mime="text/plain",
+                               key="dl_rewrite")
 
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-sh">Export</div>', unsafe_allow_html=True)
@@ -1928,11 +1955,12 @@ def render_tab_ats_export(res):
             st.markdown(f'<div class="sf-export-row"><span class="sf-ek">{k}</span><span class="sf-ev">{v}</span></div>', unsafe_allow_html=True)
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
         if REPORTLAB:
-            pdf_buf = build_pdf(c, jd, gp, pt, im, ql, iv)
+            pdf_buf = build_pdf(c, jd, gp, roadmap, im, ql, iv)
             nm = (c.get("name","candidate") or "candidate").replace(" ","_")
             st.download_button("⬇ Download PDF", data=pdf_buf,
                                file_name=f"skillforge_{nm}_{datetime.now().strftime('%Y%m%d')}.pdf",
-                               mime="application/pdf", use_container_width=True)
+                               mime="application/pdf", use_container_width=True,
+                               key="dl_pdf")
         else:
             st.caption("`pip install reportlab` for PDF export")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -1945,14 +1973,15 @@ def render_tab_ats_export(res):
             "gap_profile": [{k:v for k,v in g.items() if k!="catalog_course"} for g in gp],
             "roadmap": [{"id":m["id"],"title":m["title"],"skill":m["skill"],"level":m["level"],
                          "duration_hrs":m["duration_hrs"],"is_critical":m.get("is_critical",False),
-                         "reasoning":m.get("reasoning","")} for m in pt],
+                         "reasoning":m.get("reasoning","")} for m in roadmap],
             "generated_at": datetime.now().isoformat(),
         }
         st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
         st.download_button("⬇ Download JSON",
                            data=json.dumps(export_data, indent=2, default=str),
                            file_name=f"skillforge_{datetime.now().strftime('%Y%m%d')}.json",
-                           mime="application/json", use_container_width=True)
+                           mime="application/json", use_container_width=True,
+                           key="dl_json")
         st.markdown('</div>', unsafe_allow_html=True)
 
     with ex3:
@@ -1964,7 +1993,8 @@ def render_tab_ats_export(res):
         st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
         st.download_button("⬇ Download CSV", data="\n".join(rows),
                            file_name=f"skillforge_gap_{datetime.now().strftime('%Y%m%d')}.csv",
-                           mime="text/csv", use_container_width=True)
+                           mime="text/csv", use_container_width=True,
+                           key="dl_csv")
         st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
@@ -2071,13 +2101,13 @@ def cli_analyze(scenario_key):
     result = run_analysis(s["resume"], s["jd"])
     print(f"  Done in {round(time.time()-t0,2)}s")
     if "error" in result: print(f"  Error: {result}"); return
-    c=result["candidate"]; im=result["impact"]; iv=result["interview"]; pt=result["path"]
+    c=result["candidate"]; im=result["impact"]; iv=result["interview"]; path=result["path"]
     print(f"  Candidate : {c.get('name','–')} ({c.get('seniority','–')})")
     print(f"  Role      : {result['jd'].get('role_title','–')}")
     print(f"  Fit       : {im['current_fit']}% → {im['projected_fit']}% (+{im['fit_delta']}%)")
     print(f"  Interview : {iv['score']}% ({iv['label']})")
     print(f"  Roadmap   : {im['modules_count']} modules / {im['roadmap_hours']}h / {im['critical_count']} critical")
-    for i,m in enumerate(pt):
+    for i,m in enumerate(path):
         print(f"    {'★' if m.get('is_critical') else ' '} #{i+1:02d} [{m['level'][:3]}] {m['title']} ({m['duration_hrs']}h)")
     print(f"\n  Hours saved vs generic 60h: ~{im['hours_saved']}h\n")
 
