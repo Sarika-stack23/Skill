@@ -1,36 +1,22 @@
 # SkillForge — AI-Adaptive Onboarding Engine
 
 > **ARTPARK CodeForge Hackathon Submission**
-> Personalized, dependency-aware learning roadmaps from a resume + job description — powered by Groq LLaMA 3.3, NetworkX, and semantic skill matching.
+> Intelligent skill-gap analysis and personalized learning pathway generation — powered by Groq LLaMA 3.3, NetworkX, and Plotly Dash.
 
 ---
 
 ## What It Does
 
-Upload a resume and a job description. SkillForge:
+Most corporate onboarding is static — everyone gets the same 60-hour curriculum regardless of what they already know. SkillForge fixes this.
 
-1. Parses both documents using Groq LLaMA 3.3 to extract structured skill data
-2. Applies a **Skill Decay Model** — skills unused for >2 years are automatically downgraded
-3. Classifies every JD skill as **Known / Partial / Missing** with a 0–10 proficiency score
-4. Generates a **dependency-aware learning roadmap** using NetworkX topological sort
-5. Highlights the **critical path** — the longest prerequisite chain that unlocks the most skills
-6. Shows a **Role Fit Score** before and after completing the roadmap (e.g. 42 → 87)
-7. Detects **seniority mismatches** and auto-injects leadership modules
-8. Produces a downloadable **PDF report** with full reasoning traces
+Upload a **resume** and a **job description**. SkillForge extracts skills from both, identifies the exact gap, and generates a **dependency-aware, personalized learning roadmap** — skipping what the candidate already knows and sequencing what they need in the right order.
 
-All course recommendations come strictly from a fixed catalog — zero hallucinations by design.
-
----
-
-## Demo
-
-| Scenario | What SkillForge does |
+| Before SkillForge | After SkillForge |
 |---|---|
-| Junior SWE → Mid Full-Stack role | Long roadmap, foundational modules first, Python → Docker → AWS chain |
-| Senior Data Scientist → Lead DS | Short gap, NLP + MLOps flagged as decayed, leadership auto-injected |
-| HR Coordinator → HR Manager | Non-tech domain, L&D Strategy + Employee Relations path, seniority warning |
-
-Click **"Try a sample"** in the app to run any of these instantly without uploading files.
+| 60-hour generic onboarding | 20–35 hour personalized roadmap |
+| Same path for junior and senior | Role-fit score + adaptive path per candidate |
+| No reasoning for training choices | AI reasoning trace on every module |
+| One-size-fits-all | Works for Tech, Non-Tech, and Hybrid roles |
 
 ---
 
@@ -40,198 +26,179 @@ Click **"Try a sample"** in the app to run any of these instantly without upload
 Resume (PDF/DOCX) + Job Description
           │
           ▼
-    Text Extraction
-    (pdfplumber / python-docx)
+   ┌─────────────┐
+   │  PDF/DOCX   │  pdfplumber · python-docx
+   │   Parser    │
+   └──────┬──────┘
+          │ raw text
+          ▼
+   ┌─────────────┐
+   │  Groq LLM   │  LLaMA 3.3-70b
+   │   Parser    │  → structured JSON: skills, proficiency, seniority
+   └──────┬──────┘
           │
           ▼
-    Groq LLaMA 3.3 Parser
-    → Resume: skills, proficiency 0-10, year_last_used, seniority
-    → JD:     required_skills, preferred_skills, seniority_required
-          │
-          ▼
-    Skill Decay Model
-    decay_factor = max(0.5, 1 - (years_since / 5))
-          │
-          ▼
-    Gap Analyzer
-    Known (≥7) / Partial (1-6) / Missing (0)
-    Semantic matching via sentence-transformers cosine similarity
-          │
-          ▼
-    Adaptive Path Generator  ←──── Course Catalog (44 modules, fixed)
-    NetworkX topological sort
-    Critical path: nx.dag_longest_path()
-    Seniority injection: LD01 → LD02 → LD03
-          │
-          ▼
-    Groq LLaMA 3.3 Reasoning
-    2-sentence trace per module (parallel, ThreadPoolExecutor)
-          │
-          ▼
-    Plotly Dash UI
-    Radar chart · Timeline · Role Fit Score · PDF Export
+   ┌─────────────────────┐
+   │   Semantic Matcher  │  sentence-transformers cosine similarity
+   │   + Skill Decay     │  skills unused 2+ years → proficiency reduction
+   └──────────┬──────────┘
+              │
+              ▼
+   ┌─────────────────────┐
+   │    Gap Analyzer     │  Known / Partial / Missing
+   │  + Seniority Check  │  auto-injects leadership modules on mismatch
+   └──────────┬──────────┘
+              │ Gap Profile
+              ▼
+   ┌─────────────────────────────────────────┐
+   │      Adaptive Path Generator            │
+   │   NetworkX DAG topological sort         │  ← Original algorithm
+   │   Critical path detection               │
+   │   Dependency chaining (prereq-aware)    │
+   └──────────────────┬──────────────────────┘
+                      │
+                      ▼
+   ┌─────────────────────────────────────────┐
+   │         Groq Reasoning Tracer           │  parallel via ThreadPoolExecutor
+   │  "Why this module?" per recommendation  │
+   └──────────────────┬──────────────────────┘
+                      │
+                      ▼
+   ┌─────────────────────────────────────────┐
+   │           Plotly Dash UI                │
+   │  Radar Chart · Timeline · Role Fit Score│
+   │  Impact Card · PDF Export               │
+   └─────────────────────────────────────────┘
 ```
-
----
-
-## Key Design Decisions
-
-**The adaptive algorithm is original Python logic — not an LLM deciding the order.**
-Groq is used only for: (1) parsing text → structured JSON, and (2) writing reasoning traces.
-Course recommendations come strictly from the catalog. The sequencing, prioritization, decay calculation, critical path, and seniority injection are all deterministic Python.
-
-**Skill Decay Model** — A unique feature not found in other onboarding tools. A skill used in 2019 but not since is not the same as one used last month. The formula `decay_factor = max(0.5, 1 - (years_since / 5))` reduces proficiency proportionally, with a floor of 50% (skills don't vanish, they get rusty). This makes the gap analysis more realistic and the roadmap more targeted.
-
-**Critical Path** — Using `nx.dag_longest_path()` on the dependency subgraph, the system identifies which modules are on the longest prerequisite chain. These are highlighted in red with a ⚡ badge. Completing critical path modules first unlocks the maximum number of downstream skills.
 
 ---
 
 ## Tech Stack
 
-| Layer | Tool | Purpose |
-|---|---|---|
-| UI | Plotly Dash + Dash Bootstrap Components | Interactive web app, dark/light mode |
-| Charts | Plotly Graph Objects | Radar chart, training timeline |
-| LLM | Groq API (LLaMA 3.3 70b) | Resume & JD parsing, reasoning traces |
-| Semantic Matching | sentence-transformers (all-MiniLM-L6-v2) | Cosine similarity skill matching |
-| Dependency Graph | NetworkX | Topological sort, critical path |
-| PDF Parsing | pdfplumber | Resume & JD PDF extraction |
-| DOCX Parsing | python-docx | Resume DOCX extraction |
-| PDF Export | ReportLab | Downloadable roadmap report |
-| Env Management | python-dotenv | Secure API key handling |
-| Language | Python 3.10+ | 100% Python, single file |
+| Layer | Technology |
+|---|---|
+| **UI Framework** | Plotly Dash 4 + Dash Bootstrap Components 2 |
+| **Charts** | Plotly (Radar chart, horizontal bar timeline) |
+| **LLM** | Groq API — LLaMA 3.3-70b-versatile |
+| **Skill Matching** | `sentence-transformers` (all-MiniLM-L6-v2) + cosine similarity |
+| **Dependency Graph** | `networkx` — DiGraph, topological sort, critical path |
+| **PDF Parsing** | `pdfplumber` |
+| **DOCX Parsing** | `python-docx` |
+| **PDF Export** | `reportlab` |
+| **Env Management** | `python-dotenv` |
 
 ---
 
-## Features
+## Key Features
 
-- **Dark / Light mode toggle** — smooth theme switch in the nav bar
-- **Skill Decay Model** — skills unused >2 years auto-downgraded with orange badge
-- **Role Fit Score** — before vs after delta displayed as a credit-score-style number
-- **Seniority Mismatch Warning** — yellow banner + auto leadership module injection
-- **Readiness Estimator** — "Ready in ~3 weeks at 2h/day" with live dropdown
-- **Critical Path Highlighting** — ⚡ red modules, `nx.dag_longest_path()` powered
-- **Domain Color Badges** — Teal=Tech, Yellow=Non-Tech, Purple=Soft on every module card
-- **One-Click Sample Inputs** — Junior SWE / Senior DS / HR Manager preloaded
-- **Confidence Band on Radar** — pre-decay vs post-decay skill trace, 3-layer radar
-- **Parallel reasoning traces** — ThreadPoolExecutor(max_workers=4), ~4× faster
-- **PDF export** — full report with impact table, roadmap, gap overview
-- **Zero hallucinations** — catalog validator enforced in code, not prompt
+### Core Pipeline
+- **Groq LLM Parsing** — Structured JSON extraction from raw resume and JD text
+- **Semantic Skill Matching** — Cosine similarity maps "React.js" → "Frontend Development", etc.
+- **Skill Gap Analysis** — Proficiency score (0–10) per skill; Known / Partial / Missing classification
+- **Adaptive Path Generator** — Original algorithm using NetworkX topological sort + prerequisite chaining
+- **Zero Hallucinations** — All recommendations come strictly from the pre-loaded course catalog; LLM never names courses
+- **Groq Reasoning Traces** — AI-generated 2-sentence explanation per module (parallelized via ThreadPoolExecutor)
+
+### Advanced Features (v2)
+- **Skill Decay Model** — Skills unused for 2+ years have proficiency reduced via decay formula: `max(0.5, 1 - years_since/5)`
+- **Role Fit Score** — Current fit % → Projected fit % delta, displayed as a before/after score card
+- **Critical Path Highlighting** — NetworkX `dag_longest_path` identifies the most important module chain
+- **Seniority Mismatch Detection** — Auto-injects leadership/strategy modules when candidate level < required level
+- **Readiness Estimator** — "Ready in X weeks at Y hours/day" calculator
+- **Domain Color Badges** — Tech (teal) / Non-Tech (yellow) / Soft (purple) on every module card
+- **Dark / Light Mode** — Clientside toggle, instant switch
+- **One-Click Sample Inputs** — 3 preset demo scenarios: Junior SWE, Senior Data Scientist, HR Manager
+- **PDF Report Export** — Full roadmap with impact table, module reasoning, and skill gap overview
+
+---
+
+## Adaptive Algorithm — Logic Detail
+
+The path generator is **not** an LLM deciding the order. It runs custom Python logic:
+
+```
+1. Collect catalog modules for all Missing + Partial skills
+2. Walk the NetworkX dependency graph to pull in any prerequisite
+   modules the candidate doesn't already have
+3. Build an induced subgraph of all needed modules
+4. Run topological sort → guarantees foundational-first ordering
+5. Detect critical path (longest dependency chain) → highlighted in red
+6. Score each module: required-gap first, then ascending proficiency
+7. If seniority mismatch detected → inject LD01/LD02/LD03 leadership modules
+```
+
+This produces a guaranteed-valid, dependency-aware sequence every time — not a stochastic LLM guess.
+
+---
+
+## Course Catalog
+
+The system contains **47 pre-loaded courses** across 5 domains:
+
+| Domain | Courses | Examples |
+|---|---|---|
+| **Tech** | 28 | Python, ML, SQL, Docker, Kubernetes, AWS, React, FastAPI |
+| **Non-Tech** | 13 | HR, Recruitment, Logistics, Finance, Operations |
+| **Soft Skills** | 6 | Communication, Leadership, Strategic Thinking |
+
+Each course has: `id`, `title`, `skill`, `domain`, `level`, `duration_hrs`, `prereqs[]`
+
+All recommendations come **strictly from this catalog**. The LLM is never asked to name a course.
 
 ---
 
 ## Evaluation Criteria Coverage
 
-| Criterion | Weight | How We Address It |
+| Criterion | Weight | Coverage |
 |---|---|---|
-| Technical Sophistication | 20% | Semantic matching + NetworkX critical path + Skill Decay Model + proficiency scoring |
-| Communication & Documentation | 20% | This README + 5-slide deck + demo video |
-| User Experience | 15% | Dash + DBC + dark/light mode + loading spinner + sample inputs + error handling |
-| Grounding & Reliability | 15% | Catalog-only recommendations enforced in Python, not prompt |
-| Reasoning Trace | 10% | Groq-generated 2-sentence trace per module, visible in expandable cards |
-| Product Impact | 10% | Role Fit Score delta + hours saved + readiness estimator |
-| Cross-Domain Scalability | 10% | Tech + Non-Tech + Soft catalog, domain badges, 3 demo scenarios |
+| Technical Sophistication | 20% | Semantic matching · NetworkX graph · proficiency scoring · skill decay |
+| Communication & Documentation | 20% | This README · demo video · 5-slide deck |
+| User Experience | 15% | Dash + DBC · charts · dark/light mode · loading states · error messages |
+| Grounding & Reliability | 15% | Catalog-only enforcement in code · confidence thresholds |
+| Reasoning Trace | 10% | Groq-generated per module · visible in UI accordion |
+| Product Impact | 10% | Hours saved · role readiness % · fit delta displayed |
+| Cross-Domain Scalability | 10% | Tech + Non-Tech + Soft all in catalog · domain auto-detection |
 
 ---
 
 ## Setup
 
 ### Prerequisites
-
-- Python 3.10 or higher
+- Python 3.9+
 - A Groq API key — get one free at [console.groq.com](https://console.groq.com)
 
 ### Installation
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-username/skillforge-onboarding.git
-cd skillforge-onboarding
+# 1. Clone the repo
+git clone https://github.com/Sarika-stack23/Skill.git
+cd Skill
 
 # 2. Install dependencies
 pip install -r requirements.txt
 
-# 3. Set your Groq API key
+# 3. Add your Groq API key
 echo "GROQ_API_KEY=gsk_your_key_here" > .env
 
-# 4. Run the app
+# 4. Run
 python main.py
-
-# 5. Open in browser
-# → http://localhost:8050
 ```
 
-### Docker (optional)
+Open your browser at **http://localhost:8050**
+
+### Optional: Better Semantic Matching
+
+For higher-quality skill matching (recommended):
 
 ```bash
-docker build -t skillforge .
-docker run -e GROQ_API_KEY=gsk_your_key_here -p 8050:8050 skillforge
+pip install sentence-transformers scikit-learn
 ```
 
----
-
-## Project Structure
-
-```
-skillforge/
-├── main.py          ← entire application (1349 lines, 14 sections)
-├── .env             ← GROQ_API_KEY=gsk_... (never committed)
-├── .gitignore       ← ignores .env, __pycache__
-├── requirements.txt ← all dependencies
-├── Dockerfile       ← container deployment
-└── README.md        ← this file
-```
-
-### main.py Sections
-
-| Section | Content |
-|---|---|
-| 1 | Imports, config, API key guard |
-| 2 | Course catalog (44 modules) + sample inputs |
-| 3 | NetworkX dependency graph |
-| 4 | PDF and DOCX text extractors |
-| 5 | Groq API — parse_resume, parse_jd, generate_reasoning |
-| 6 | Semantic skill matching + pre-computed embeddings |
-| 6B | Skill Decay Model |
-| 7 | Gap analyzer (Known/Partial/Missing) |
-| 7B | Seniority mismatch checker |
-| 8 | Adaptive path generator + critical path |
-| 9 | Impact scorer + Role Fit Score delta |
-| 9B | Readiness estimator |
-| 10 | Plotly charts (radar + timeline) |
-| 11 | ReportLab PDF export |
-| 12 | Dash app layout + CSS (dark/light mode) |
-| 13 | All callbacks |
-| 14 | Startup |
+If not installed, the system automatically falls back to substring matching.
 
 ---
 
-## Course Catalog
-
-44 courses across 3 domains:
-
-| Domain | Skills Covered |
-|---|---|
-| **Tech** | Python, Data Analysis, ML, Deep Learning, NLP, MLOps, SQL, Docker, Kubernetes, AWS, GCP, React, FastAPI, Cybersecurity, Agile |
-| **Non-Tech** | Human Resources, Recruitment, Performance Management, Logistics, Inventory, Finance, Accounting, Budgeting |
-| **Soft** | Communication, Leadership, Strategic Planning, Collaboration, Project Management |
-
-Each course has: ID, title, skill, domain, level (Beginner/Intermediate/Advanced), duration in hours, and prerequisite IDs. The catalog is the only source of truth — the LLM never generates course names.
-
----
-
-## Datasets & Models Cited
-
-| Resource | Usage |
-|---|---|
-| Groq API — LLaMA 3.3 70b (`llama-3.3-70b-versatile`) | Resume & JD parsing, reasoning trace generation |
-| `sentence-transformers/all-MiniLM-L6-v2` (HuggingFace) | Skill embedding for cosine similarity matching |
-| Custom course catalog | 44 hand-curated modules across Tech/Non-Tech/Soft |
-| O*NET Occupational Database | Reference for skill taxonomy design |
-
----
-
-## requirements.txt
+## Requirements
 
 ```
 dash
@@ -242,24 +209,73 @@ pdfplumber
 python-docx
 python-dotenv
 reportlab
-sentence-transformers
 networkx
-scikit-learn
+sentence-transformers   # optional but recommended
+scikit-learn            # required with sentence-transformers
 ```
 
 ---
 
-## Environment Variables
+## Docker (Optional)
 
-| Variable | Required | Description |
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 8050
+CMD ["python", "main.py"]
+```
+
+```bash
+docker build -t skillforge .
+docker run -e GROQ_API_KEY=gsk_your_key -p 8050:8050 skillforge
+```
+
+---
+
+## Project Structure
+
+```
+Skill/
+├── main.py            ← Entire application (single file, 1482 lines)
+├── .env               ← GROQ_API_KEY=... (never committed)
+├── .gitignore         ← Excludes .env
+├── requirements.txt
+├── Dockerfile
+└── README.md
+```
+
+---
+
+## Demo Scenarios
+
+Three one-click sample inputs are built into the UI:
+
+| Scenario | What It Tests |
+|---|---|
+| 👨‍💻 Junior SWE → Mid Full Stack | Long roadmap, many missing skills, seniority gap detected |
+| 🧠 Senior Data Scientist → Lead DS | Short roadmap, skill decay on NLP/MLOps, strategic modules added |
+| 👔 HR Coordinator → HR Manager | Non-tech domain, people management, leadership injection |
+
+---
+
+## Datasets & Model Citations
+
+| Resource | Source | Usage |
 |---|---|---|
-| `GROQ_API_KEY` | Yes | Your Groq API key — get it at console.groq.com |
+| Resume Dataset | [Kaggle — snehaanbhawal](https://www.kaggle.com/datasets/snehaanbhawal/resume-dataset/data) | Testing & validation |
+| Occupational Skills | [O*NET OnLine Database](https://www.onetcenter.org/db_releases.html) | Skill taxonomy reference |
+| Job Descriptions | [Kaggle — kshitizregmi](https://www.kaggle.com/datasets/kshitizregmi/jobs-and-job-description) | JD testing |
+| LLM | LLaMA 3.3-70b-versatile via [Groq](https://groq.com) | Parsing + reasoning |
+| Embedding Model | `all-MiniLM-L6-v2` via [sentence-transformers](https://www.sbert.net) | Semantic skill matching |
 
 ---
 
 ## License
 
-MIT License — built for the ARTPARK CodeForge Hackathon.
+MIT License — built for the ARTPARK CodeForge Hackathon 2025.
 
 ---
 
