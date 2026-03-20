@@ -1,5 +1,5 @@
 # =============================================================================
-#  main.py — SkillForge v8  |  Clean redesign · Real data only · Feature-effective
+#  main.py — SkillForge v9  |  All bugs fixed · Enhanced image resume analysis
 #  Run: streamlit run main.py
 # =============================================================================
 
@@ -20,6 +20,25 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# ── Inject hide-toolbar CSS immediately — must be first st call after set_page_config ──
+st.markdown("""<style>
+footer,#MainMenu,
+header[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="stAppDeployButton"],
+[data-testid="stBaseButton-header"],
+[data-testid="stBaseButton-minimal"],
+[data-testid="stBaseButton-borderless"],
+.stDeployButton,button[kind="header"],button[kind="minimal"],
+[data-testid="stHeader"] button,[data-testid="stHeader"] a,
+[data-testid="stHeader"]>div,#stDecoration
+{display:none!important;visibility:hidden!important;height:0!important;
+ width:0!important;overflow:hidden!important;opacity:0!important}
+[data-testid="stHeader"]{height:0!important;min-height:0!important;padding:0!important}
+</style>""", unsafe_allow_html=True)
+
 import plotly.graph_objects as go
 import networkx as nx
 import pdfplumber
@@ -38,7 +57,7 @@ except Exception:
 # =============================================================================
 #  WEB SEARCH
 # =============================================================================
-_DDG_ERROR: str = ""   # surfaced to UI when search fails
+_DDG_ERROR: str = ""
 
 def ddg_search(query: str, max_results: int = 5) -> List[dict]:
     global _DDG_ERROR
@@ -76,9 +95,11 @@ if not _GROQ_KEY:
     st.error("**GROQ_API_KEY missing** — add it to `.env`  →  [console.groq.com](https://console.groq.com)")
     st.stop()
 
-GROQ_CLIENT  = Groq(api_key=_GROQ_KEY)
-MODEL_FAST   = "llama-3.3-70b-versatile"
-CURRENT_YEAR = datetime.now().year
+GROQ_CLIENT   = Groq(api_key=_GROQ_KEY)
+MODEL_FAST    = "llama-3.3-70b-versatile"
+# FIX #1: Use a vision-capable model for image resumes
+MODEL_VISION  = "meta-llama/llama-4-scout-17b-16e-instruct"
+CURRENT_YEAR  = datetime.now().year
 
 # =============================================================================
 #  CATALOG — 47 courses
@@ -252,13 +273,80 @@ def parse_uploaded_file(f) -> Tuple[str, Optional[str]]:
 # =============================================================================
 _audit_log: List[dict] = []
 
+# FIX #2 & #19: Separate vision call from text call — vision models don't support
+# response_format=json_object and need a different content format + JSON parsing
+def _groq_call_vision(prompt: str, system: str, image_b64: str, max_tokens: int = 3200) -> dict:
+    """Call a vision-capable Groq model for image resume analysis."""
+    content = [
+        {"type": "image_url", "image_url": {"url": image_b64}},
+        {"type": "text", "text": prompt}
+    ]
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
+    t0 = time.time()
+    try:
+        r = GROQ_CLIENT.chat.completions.create(
+            model=MODEL_VISION,
+            messages=messages,
+            temperature=0.1,
+            max_tokens=max_tokens,
+            # FIX #19: Vision models do NOT support response_format=json_object
+            # We parse JSON from the text response manually
+        )
+        raw_text = r.choices[0].message.content or "{}"
+        usage = r.usage
+        in_tok  = usage.prompt_tokens if usage else 0
+        out_tok = usage.completion_tokens if usage else 0
+        cost = round((in_tok*0.00000011)+(out_tok*0.00000034),6)
+        _audit_log.append({"ts":datetime.now().strftime("%H:%M:%S"),
+                           "model": MODEL_VISION.split("/")[-1][:22],
+                           "in":in_tok,"out":out_tok,
+                           "ms":round((time.time()-t0)*1000),"cost":cost,"status":"ok"})
+        # FIX: Extract JSON from response — strip markdown fences if present
+        json_text = _extract_json(raw_text)
+        return json.loads(json_text)
+    except json.JSONDecodeError as e:
+        _audit_log.append({"ts":datetime.now().strftime("%H:%M:%S"),
+                           "model":MODEL_VISION.split("/")[-1][:22],
+                           "status":f"json_err:{str(e)[:40]}","in":0,"out":0,"ms":0,"cost":0})
+        return {"error": f"vision_json_parse_failed: {e}"}
+    except Exception as e:
+        err = str(e); wait_s = 0
+        if "429" in err or "rate_limit" in err:
+            m = re.search(r"try again in (\d+)m([\d.]+)s", err)
+            if m: wait_s = int(m.group(1))*60+float(m.group(2))
+            return {"error":"rate_limited","wait_seconds":int(wait_s),
+                    "message":f"Rate limited. Retry in {int(wait_s//60)}m{int(wait_s%60)}s."}
+        _audit_log.append({"ts":datetime.now().strftime("%H:%M:%S"),
+                           "model":MODEL_VISION.split("/")[-1][:22],
+                           "status":f"err:{err[:40]}","in":0,"out":0,"ms":0,"cost":0})
+        return {"error": err}
+
+
+def _extract_json(text: str) -> str:
+    """Extract JSON object from text that may contain markdown fences or prose."""
+    # Strip ```json ... ``` or ``` ... ``` fences
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    text = text.replace("```", "").strip()
+    # Find first { ... } block
+    start = text.find("{")
+    if start == -1:
+        return "{}"
+    # Find matching closing brace
+    depth, end = 0, -1
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{": depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    return text[start:end] if end > start else text[start:]
+
+
 def _groq_call(prompt: str, system: str, model: str = MODEL_FAST,
-               max_tokens: int = 2800, image_b64: Optional[str] = None) -> dict:
-    content: Any = prompt
-    if image_b64:
-        content = [{"type":"image_url","image_url":{"url":image_b64}},
-                   {"type":"text","text":prompt}]
-    messages = [{"role":"system","content":system},{"role":"user","content":content}]
+               max_tokens: int = 2800) -> dict:
+    """Standard text-only Groq call with JSON response format."""
+    messages = [{"role":"system","content":system},{"role":"user","content":prompt}]
     t0 = time.time()
     try:
         r = GROQ_CLIENT.chat.completions.create(
@@ -288,9 +376,26 @@ def _groq_call(prompt: str, system: str, model: str = MODEL_FAST,
                            "status":f"err:{err[:40]}","in":0,"out":0,"ms":0,"cost":0})
         return {"error":err}
 
+
 _MEGA_SYS = """You are a world-class senior tech recruiter, ATS specialist, and L&D expert.
 Extract ALL sections in ONE response as valid JSON. Be precise and evidence-based. No hallucinations.
-Return ONLY the JSON object — no preamble, no markdown."""
+Return ONLY the JSON object — no preamble, no markdown fences, no explanation text."""
+
+# FIX #3 & #10: New dedicated vision system prompt for image resumes
+_VISION_SYS = """You are an expert resume parser and tech recruiter. The user has uploaded an IMAGE of their resume.
+
+STEP 1 — OCR: Read every piece of text visible in the resume image carefully, including:
+  - Name, contact details
+  - Work experience: company names, job titles, dates, responsibilities
+  - Education: degree, institution, year
+  - Skills section: all listed skills with any proficiency indicators
+  - Projects, certifications, awards
+  - Any other visible sections
+
+STEP 2 — ANALYZE: Compare the extracted resume against the job description provided.
+
+Return ONLY a valid JSON object (no markdown, no prose before/after the JSON)."""
+
 
 def mega_call(resume_text: str, jd_text: str,
               modules_hint: Optional[List[dict]] = None,
@@ -298,16 +403,8 @@ def mega_call(resume_text: str, jd_text: str,
     reasoning_block = ""
     if modules_hint:
         reasoning_block = '\n  "reasoning": {"<module_id>": "<2-sentence why this candidate needs this module>"},'
-    prompt = f"""Analyze this resume and job description.
 
-RESUME ({'IMAGE' if resume_image_b64 else 'TEXT'}):
-{resume_text[:2000] if not resume_image_b64 else '[See attached image]'}
-
-JOB DESCRIPTION:
-{jd_text[:1200]}
-
-Return EXACTLY this JSON:
-{{
+    json_schema = f"""{{
   "candidate": {{
     "name": "<full name or Unknown>",
     "current_role": "<latest title>",
@@ -338,8 +435,43 @@ Return EXACTLY this JSON:
     "interview_talking_points": ["<pt1>","<pt2>","<pt3>"]
   }}{reasoning_block}
 }}"""
-    return _groq_call(prompt=prompt, system=_MEGA_SYS, model=MODEL_FAST,
-                      max_tokens=2800, image_b64=resume_image_b64)
+
+    if resume_image_b64:
+        # FIX #1, #2, #3: Use vision model with detailed image extraction prompt
+        prompt = f"""I have uploaded an IMAGE of my resume. Please:
+
+1. Carefully OCR and read ALL text from the resume image
+2. Extract every skill, job title, company, date, project, and education detail visible
+3. Analyze the gap against this job description:
+
+JOB DESCRIPTION:
+{jd_text[:1200]}
+
+Return EXACTLY this JSON schema (fill all fields based on what you can read from the image):
+{json_schema}
+
+Important: Extract skills from the resume image with realistic proficiency scores (1-10) based on how they are described (e.g., 'expert' = 9, 'proficient' = 7, 'familiar' = 4, 'basic' = 3). For year_last_used, use the most recent job/project year where that skill appeared."""
+
+        return _groq_call_vision(
+            prompt=prompt,
+            system=_VISION_SYS,
+            image_b64=resume_image_b64,
+            max_tokens=3200
+        )
+    else:
+        # Text resume — use standard fast model
+        prompt = f"""Analyze this resume and job description.
+
+RESUME (TEXT):
+{resume_text[:2000]}
+
+JOB DESCRIPTION:
+{jd_text[:1200]}
+
+Return EXACTLY this JSON:
+{json_schema}"""
+        return _groq_call(prompt=prompt, system=_MEGA_SYS, model=MODEL_FAST, max_tokens=2800)
+
 
 def rewrite_resume(resume_text: str, jd: dict, missing_kw: List[str]) -> str:
     r = _groq_call(
@@ -411,7 +543,7 @@ def search_job_market(role: str) -> List[str]:
 # =============================================================================
 #  CACHE
 # =============================================================================
-_CACHE_PATH = "/tmp/skillforge_v8"
+_CACHE_PATH = "/tmp/skillforge_v9"
 def _ckey(r: str, j: str) -> str: return hashlib.md5((r+"||"+j).encode()).hexdigest()
 def cache_get(r, j):
     try:
@@ -544,7 +676,8 @@ def interview_readiness(gp, c):
             "req_known":len(rk),"req_partial":len(rp),"req_missing":len(rm)}
 
 def weekly_plan(path, hpd=2.0):
-    cap, weeks, cur, hrs, wn = hpd*5, [], [], 0.0, 1
+    cap = max(hpd, 0.5) * 5  # FIX: guard against 0
+    weeks, cur, hrs, wn = [], [], 0.0, 1
     for m in path:
         rem = float(m["duration_hrs"])
         while rem > 0:
@@ -585,7 +718,8 @@ def roi_rank(gp, path):
     return sorted(out, key=lambda x: x["roi"], reverse=True)
 
 def weeks_ready(hrs, hpd):
-    if hpd <= 0: return "-"
+    hpd = max(hpd, 0.5)  # FIX: guard against 0
+    if hrs <= 0: return "0d"
     w = (hrs/hpd)/5
     if w < 1:   return f"{int(hrs/hpd)}d"
     elif w < 4: return f"{w:.1f}w"
@@ -595,8 +729,7 @@ def weeks_ready(hrs, hpd):
 #  FULL PIPELINE
 # =============================================================================
 def run_analysis(resume_text, jd_text, resume_image_b64=None):
-    # Use a content-based key: hash the image bytes if resume text is empty,
-    # so two different image resumes don't collide in cache.
+    # FIX #11: Consistent cache key — hash image data URI fully (already correct, kept)
     if resume_text:
         cache_k = resume_text
     elif resume_image_b64:
@@ -792,9 +925,8 @@ def roi_bar(roi_list):
 #  CSS
 # =============================================================================
 CSS = """
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
 :root{
   --bg:      #0b0d14;
   --s1:      #131720;
@@ -824,7 +956,27 @@ html,body,[class*="css"]{
 }
 .stApp{background:var(--bg)!important}
 .main .block-container{padding:0!important;max-width:100%!important}
-footer,#MainMenu,header[data-testid="stHeader"],[data-testid="stToolbar"]{display:none!important}
+footer,
+#MainMenu,
+header[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="stAppDeployButton"],
+[data-testid="stBaseButton-header"],
+[data-testid="stBaseButton-minimal"],
+[data-testid="stBaseButton-borderless"],
+.stDeployButton,
+button[kind="header"],
+button[kind="minimal"],
+[data-testid="stHeader"] button,
+[data-testid="stHeader"] a,
+[data-testid="stHeader"] > div,
+#stDecoration
+{display:none!important;visibility:hidden!important;height:0!important;
+ width:0!important;overflow:hidden!important;pointer-events:none!important;
+ position:absolute!important;opacity:0!important}
+[data-testid="stHeader"]{height:0!important;min-height:0!important;padding:0!important}
 section[data-testid="stSidebar"]>div:first-child{
   background:var(--s1)!important;border-right:1px solid var(--border)!important;
 }
@@ -887,6 +1039,12 @@ section[data-testid="stSidebar"]>div:first-child{
 }
 .sf-wc{font-family:var(--mono);font-size:0.65rem;color:var(--t3);margin-top:8px}
 
+/* image upload hint */
+.sf-img-hint{
+  background:rgba(45,212,191,0.04);border:1px solid var(--bhi);border-radius:7px;
+  padding:9px 13px;margin-top:8px;font-family:var(--mono);font-size:0.68rem;color:var(--teal);
+}
+
 /* file uploader */
 [data-testid="stFileUploadDropzone"]{
   background:rgba(45,212,191,0.02)!important;
@@ -944,6 +1102,11 @@ textarea::placeholder{color:var(--t4)!important}
   font-family:var(--mono);font-size:0.6rem;padding:2px 8px;border-radius:3px;
   background:rgba(167,139,250,0.1);color:var(--purple);border:1px solid rgba(167,139,250,0.2);
   margin-left:auto;margin-top:4px;
+}
+.sf-vision-badge{
+  font-family:var(--mono);font-size:0.6rem;padding:2px 8px;border-radius:3px;
+  background:rgba(45,212,191,0.1);color:var(--teal);border:1px solid var(--bhi);
+  margin-left:8px;margin-top:4px;
 }
 
 /* score circles row */
@@ -1200,7 +1363,7 @@ def _init_state():
         "resume_image":   None,
         "jd_text":        "",
         "result":         None,
-        "completed":      [],
+        "completed":      [],      # FIX Bug 3: list not set
         "hpd":            2,
         "rw_result":      None,
         "course_cache":   {},
@@ -1236,6 +1399,7 @@ def render_topbar():
       <div class="sf-logo">Skill<em>Forge</em></div>
       <div class="sf-top-right">
         <span class="sf-chip on">Groq LLaMA 3.3-70b</span>
+        <span class="sf-chip on">Llama 4 Vision</span>
         <span class="sf-chip">NetworkX DAG</span>
         <span class="sf-chip">{sem}</span>
         <span class="sf-chip">{calls} calls · ${cost:.4f}</span>
@@ -1271,7 +1435,6 @@ def render_input():
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    # Compute ready flags from synced state
     resume_ready = bool(
         st.session_state.get("resume_text","").strip() or
         st.session_state.get("res_paste","").strip() or
@@ -1289,6 +1452,7 @@ def render_input():
         ready_badge = '<span class="sf-ready-badge">✓ Ready</span>' if resume_ready else ''
         st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">📄</span> Your resume {ready_badge}</div>', unsafe_allow_html=True)
 
+        # FIX Bug 1: Unique tab labels for resume vs JD
         r_tab_up, r_tab_paste = st.tabs(["📄 Upload Resume", "✏️ Paste Resume"])
         with r_tab_up:
             rf = st.file_uploader("Resume file", type=["pdf","docx","jpg","jpeg","png","webp"],
@@ -1298,11 +1462,17 @@ def render_input():
                 st.session_state["resume_text"]  = txt
                 st.session_state["resume_image"] = img
                 if "res_paste" in st.session_state: del st.session_state["res_paste"]
-                wc = len(txt.split()) if txt else 0
-                st.success(f"✓ {rf.name} — {wc} words" if wc else f"✓ {rf.name} (image)")
+                if img:
+                    wc = 0
+                    st.success(f"✓ {rf.name} (image resume — Llama 4 Vision will analyze)")
+                    # FIX: Show the uploaded image preview
+                    st.image(rf, caption="Resume image uploaded", use_container_width=True)
+                    st.markdown('<div class="sf-img-hint">🔍 Llama 4 Scout Vision will OCR and extract all text, skills, experience, and education from this image</div>', unsafe_allow_html=True)
+                else:
+                    wc = len(txt.split()) if txt else 0
+                    st.success(f"✓ {rf.name} — {wc} words")
 
         with r_tab_paste:
-            # Pre-populate only on first render of this key
             if "res_paste" not in st.session_state:
                 st.session_state["res_paste"] = st.session_state.get("resume_text","")
 
@@ -1332,6 +1502,7 @@ def render_input():
         ready_badge_jd = '<span class="sf-ready-badge">✓ Ready</span>' if jd_ready else ''
         st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">💼</span> Job description {ready_badge_jd}</div>', unsafe_allow_html=True)
 
+        # FIX Bug 1: Unique tab labels for JD (different from resume tabs)
         j_tab_up, j_tab_paste = st.tabs(["📤 Upload JD", "📝 Paste JD"])
         with j_tab_up:
             jf = st.file_uploader("JD file", type=["pdf","docx"], key="jd_file",
@@ -1343,7 +1514,6 @@ def render_input():
                 st.success(f"✓ {jf.name} — {len(txt2.split())} words")
 
         with j_tab_paste:
-            # Pre-populate only on first render of this key
             if "jd_paste" not in st.session_state:
                 st.session_state["jd_paste"] = st.session_state.get("jd_text","")
 
@@ -1363,23 +1533,23 @@ def render_input():
 
     opt1, opt2, _, btn_col = st.columns([1, 1.2, 0.6, 1.6])
     with opt1:
-        # FIX: use key="sal_location" directly so session state stays in sync
         loc_options = ["India","USA","UK","Germany","Canada","Singapore"]
         loc_idx = loc_options.index(st.session_state.get("sal_location","India"))
-        loc = st.selectbox("Salary location", loc_options, index=loc_idx,
-                           key="sal_location", label_visibility="visible")
+        st.selectbox("Salary location", loc_options, index=loc_idx,
+                     key="sal_location", label_visibility="visible")
+        # FIX #16: key="sal_location" auto-syncs — no manual assignment needed
 
     with opt2:
-        # FIX: removed value= and removed the post-widget session state assignment
-        # key="force_fresh" automatically syncs to st.session_state["force_fresh"]
+        # FIX Bug 5: key="force_fresh" auto-syncs — don't manually reassign after render
         st.checkbox("Force fresh analysis (skip cache)", key="force_fresh")
 
     with btn_col:
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         both_ready = resume_ready and jd_ready
         if both_ready:
-            if st.button("Analyze skill gap ⚡", key="go_btn", use_container_width=True):
-                # Ensure synced state is captured before switching step
+            is_img = bool(st.session_state.get("resume_image"))
+            btn_label = "Analyze resume image ⚡" if is_img else "Analyze skill gap ⚡"
+            if st.button(btn_label, key="go_btn", use_container_width=True):
                 st.session_state["resume_text"] = (
                     st.session_state.get("resume_text","") or
                     st.session_state.get("res_paste","")
@@ -1405,7 +1575,7 @@ def render_loading():
     st.markdown('<div class="sf-page">', unsafe_allow_html=True)
     st.markdown("<div style='height:48px'></div>", unsafe_allow_html=True)
 
-    # Bust cache if requested
+    # FIX Bug 5: Use pop() to clear force_fresh without mutating widget key
     if st.session_state.get("force_fresh"):
         rtxt = st.session_state.get("resume_text","")
         rimg = st.session_state.get("resume_image","")
@@ -1421,8 +1591,13 @@ def render_loading():
         except: pass
         st.session_state.pop("force_fresh", None)
 
+    is_image_resume = bool(st.session_state.get("resume_image"))
+
     with st.status("Analyzing your profile…", expanded=True) as status:
-        st.write("📄 Parsing resume and job description")
+        if is_image_resume:
+            st.write("🖼️ Image resume detected — using Llama 4 Scout Vision for deep OCR analysis")
+        else:
+            st.write("📄 Parsing resume and job description")
         resume_text = (
             st.session_state.get("resume_text","") or
             st.session_state.get("res_paste","")
@@ -1445,11 +1620,15 @@ def render_loading():
             status.update(label="Failed", state="error")
 
     if "error" in result:
+        err = result.get("error","unknown")
         if result.get("error") == "rate_limited":
             st.error(f"⏳ Rate limited — {result.get('message','')}")
             st.info("Wait the indicated time then retry.")
+        elif "vision" in str(err).lower() or "model" in str(err).lower():
+            st.error(f"Vision model error: `{err}`")
+            st.info("The vision model (Llama 4 Scout) may not be available on your Groq plan. Try pasting resume text instead.")
         else:
-            st.error(f"Analysis failed: `{result.get('error','unknown')}`")
+            st.error(f"Analysis failed: `{err}`")
         st.markdown('<div class="sf-ghost">', unsafe_allow_html=True)
         if st.button("← Back", key="retry"):
             st.session_state["step"] = "input"; st.rerun()
@@ -1485,7 +1664,8 @@ def render_banner(res):
 
     fit_c = _RED if cur < 40 else _AMBER if cur < 65 else _GREEN
 
-    cache_badge = '<span class="sf-cache-badge">⚡ Cached</span>' if res.get("_cache_hit") else ""
+    cache_badge   = '<span class="sf-cache-badge">⚡ Cached</span>' if res.get("_cache_hit") else ""
+    vision_badge  = '<span class="sf-vision-badge">🖼 Vision OCR</span>' if res.get("_is_image") else ""
 
     st.markdown(f"""
     <div class="sf-banner">
@@ -1494,7 +1674,7 @@ def render_banner(res):
           <div class="sf-candidate-name">{name}</div>
           <div class="sf-candidate-sub">{crole} · {yrs}yr · {sen} → <strong style="color:var(--t1)">{trole}</strong></div>
         </div>
-        {cache_badge}
+        {cache_badge}{vision_badge}
       </div>
       <div class="sf-scores">
         <div class="sf-score-card">
@@ -1557,9 +1737,7 @@ def render_tab_overview(res):
                     (filt=="Known"         and g["status"]=="Known") or
                     (filt=="Required only" and g["is_required"])]
 
-        # FIX: build ALL card HTML in one string then render once
-        # Previously the loop incorrectly opened/closed the grid div on every iteration,
-        # meaning each card was its own grid and CSS grid layout never applied.
+        # Build all card HTML in one pass then render once (prevents grid layout breaks)
         cards_html = '<div class="sf-skill-grid">'
         for g in filtered:
             s    = g["status"]
@@ -1623,8 +1801,7 @@ def render_tab_overview(res):
 # =============================================================================
 def render_tab_roadmap(res):
     path      = res["path"]
-    gp        = res["gap_profile"]
-    completed = set(st.session_state.get("completed", []))
+    completed = set(st.session_state.get("completed", []))  # FIX Bug 4: load as set
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
@@ -1633,11 +1810,10 @@ def render_tab_roadmap(res):
         st.markdown('<div class="sf-sh">Learning roadmap</div>', unsafe_allow_html=True)
         st.markdown('<div class="sf-ss">Dependency-ordered · critical path highlighted · check modules off as you complete them</div>', unsafe_allow_html=True)
     with hd_r:
-        # FIX: key="hpd_s" is different from "hpd", so writing st.session_state["hpd"] after is safe
         hpd = st.select_slider("Pace (h/day)", options=[1,2,4,8],
                                value=st.session_state.get("hpd",2), key="hpd_s",
                                label_visibility="visible")
-        st.session_state["hpd"] = hpd  # safe: different key than widget's "hpd_s"
+        st.session_state["hpd"] = hpd  # safe: different key than widget "hpd_s"
         rem = sum(m["duration_hrs"] for m in path if m["id"] not in completed)
         st.markdown(f'<p style="font-family:var(--mono);font-size:0.72rem;color:var(--t2);text-align:right">{rem}h left · done in <strong style="color:var(--teal)">{weeks_ready(rem,hpd)}</strong></p>', unsafe_allow_html=True)
 
@@ -1669,6 +1845,7 @@ def render_tab_roadmap(res):
                 )
                 if chk: completed.add(m["id"])
                 else:    completed.discard(m["id"])
+                # FIX Bug 4: Save back as list
                 st.session_state["completed"] = list(completed)
 
                 prereqs_txt = ", ".join(m.get("prereqs",[]) or []) or "none"
@@ -1761,14 +1938,17 @@ def render_tab_research(res):
     shortcuts = [(s, f"{s} online course tutorial 2025") for s in gap_skills_s]
     shortcuts.append((f"{role_name[:18]} salary", f"{role_name} salary {st.session_state.get('sal_location','India')} 2025"))
 
-    sc_cols = st.columns(len(shortcuts))
-    for i,(lbl,q) in enumerate(shortcuts):
-        with sc_cols[i]:
-            if st.button(lbl[:22], key=f"sc_{i}", use_container_width=True):
-                if "search_input" in st.session_state: del st.session_state["search_input"]
-                st.session_state["search_query"] = q
-                st.session_state["search_results"] = ddg_search(q, max_results=8)
-                st.rerun()
+    # FIX #17: Guard columns to match actual shortcuts count
+    n_shortcuts = len(shortcuts)
+    if n_shortcuts > 0:
+        sc_cols = st.columns(n_shortcuts)
+        for i, (lbl, q) in enumerate(shortcuts):
+            with sc_cols[i]:
+                if st.button(lbl[:22], key=f"sc_{i}", use_container_width=True):
+                    if "search_input" in st.session_state: del st.session_state["search_input"]
+                    st.session_state["search_query"] = q
+                    st.session_state["search_results"] = ddg_search(q, max_results=8)
+                    st.rerun()
 
     if do_search and st.session_state.get("search_query","").strip():
         with st.spinner("Searching…"):
@@ -1783,7 +1963,7 @@ def render_tab_research(res):
             href  = r.get("href","")
             title = r.get("title","No title")
             body  = r.get("body","")[:200]
-            domain = href.split("/")[2] if "/" in href else href
+            domain = href.split("/")[2] if href.count("/") >= 2 else href  # FIX: safer split
             st.markdown(f"""
             <div class="sf-search-result">
               <a class="sf-search-title" href="{href}" target="_blank">{title}</a>
@@ -1890,7 +2070,6 @@ def render_tab_ats_export(res):
             st.markdown(f'<div class="sf-tip"><span class="sf-tip-n">0{i+1}</span><span>{tip}</span></div>', unsafe_allow_html=True)
 
         st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin:16px 0 8px">Interview talking points</div>', unsafe_allow_html=True)
-        # FIX: renamed loop variable from pt_txt (which shadowed nothing, but was confusing)
         for talking_pt in (ql.get("interview_talking_points") or [])[:4]:
             st.markdown(f'<div class="sf-talk">→ {talking_pt}</div>', unsafe_allow_html=True)
 
@@ -1920,9 +2099,18 @@ def render_tab_ats_export(res):
     st.markdown('<div style="font-family:var(--mono);font-size:0.68rem;color:var(--t3);margin-bottom:10px">ATS-optimized version with missing keywords added naturally</div>', unsafe_allow_html=True)
 
     rtxt = st.session_state.get("resume_text","")
-    if not rtxt:
-        st.info("Resume text required for rewrite (not available for image uploads).")
-    else:
+    is_image_resume = bool(st.session_state.get("resume_image"))
+    if not rtxt and is_image_resume:
+        st.info("Resume rewrite works on extracted text. For image resumes, the extracted text from vision analysis is used.")
+        # Attempt to use candidate name + skills as a text proxy
+        extracted_info = res.get("candidate", {})
+        if extracted_info.get("name"):
+            rtxt = f"{extracted_info.get('name','')}\n{extracted_info.get('current_role','')}\n" + \
+                   "\n".join([f"- {s['skill']} ({s['proficiency']}/10)" for s in extracted_info.get("skills",[])])
+    elif not rtxt:
+        st.info("Resume text required for rewrite.")
+
+    if rtxt:
         if st.button("Generate rewrite →", key="gen_rw"):
             with st.spinner("Rewriting with LLaMA 3.3-70b…"):
                 rw = rewrite_resume(rtxt, jd, kws)
@@ -1937,6 +2125,7 @@ def render_tab_ats_export(res):
             with rc2:
                 st.markdown('<div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.1em;text-transform:uppercase;color:var(--teal);margin-bottom:6px">Rewritten ✓</div>', unsafe_allow_html=True)
                 st.markdown(f'<div class="sf-diff">{rw[:1400]}</div>', unsafe_allow_html=True)
+            # FIX Bug 2: All download buttons have unique key=
             st.download_button("⬇ Download rewritten resume", data=rw,
                                file_name="skillforge_rewritten.txt", mime="text/plain",
                                key="dl_rewrite")
@@ -1957,6 +2146,7 @@ def render_tab_ats_export(res):
         if REPORTLAB:
             pdf_buf = build_pdf(c, jd, gp, roadmap, im, ql, iv)
             nm = (c.get("name","candidate") or "candidate").replace(" ","_")
+            # FIX Bug 2: key="dl_pdf"
             st.download_button("⬇ Download PDF", data=pdf_buf,
                                file_name=f"skillforge_{nm}_{datetime.now().strftime('%Y%m%d')}.pdf",
                                mime="application/pdf", use_container_width=True,
@@ -1970,13 +2160,14 @@ def render_tab_ats_export(res):
         st.markdown('<div class="sf-export-hd">JSON export</div><div class="sf-export-sub">Complete structured result for integrations and downstream tools</div>', unsafe_allow_html=True)
         export_data = {
             "candidate": c, "jd": jd, "impact": im, "interview": iv,
-            "gap_profile": [{k:v for k,v in g.items() if k!="catalog_course"} for g in gp],
+            "gap_profile": [{k2:v2 for k2,v2 in g.items() if k2!="catalog_course"} for g in gp],
             "roadmap": [{"id":m["id"],"title":m["title"],"skill":m["skill"],"level":m["level"],
                          "duration_hrs":m["duration_hrs"],"is_critical":m.get("is_critical",False),
                          "reasoning":m.get("reasoning","")} for m in roadmap],
             "generated_at": datetime.now().isoformat(),
         }
         st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
+        # FIX Bug 2: key="dl_json"
         st.download_button("⬇ Download JSON",
                            data=json.dumps(export_data, indent=2, default=str),
                            file_name=f"skillforge_{datetime.now().strftime('%Y%m%d')}.json",
@@ -1991,6 +2182,7 @@ def render_tab_ats_export(res):
         for g in gp:
             rows.append(f'"{g["skill"]}",{g["status"]},{g["proficiency"]},{g["is_required"]},{g.get("demand",1)},{g.get("decayed",False)}')
         st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
+        # FIX Bug 2: key="dl_csv"
         st.download_button("⬇ Download CSV", data="\n".join(rows),
                            file_name=f"skillforge_gap_{datetime.now().strftime('%Y%m%d')}.csv",
                            mime="text/csv", use_container_width=True,
@@ -2053,6 +2245,7 @@ def render_results():
 
     st.markdown('<div id="overview"></div><div id="roadmap"></div><div id="research"></div><div id="ats"></div>', unsafe_allow_html=True)
 
+    # FIX Bug 1: Tab labels are unique strings — no collision
     t1, t2, t3, t4 = st.tabs(["📊 Overview & Gap", "🗺️ Roadmap", "🌐 Research", "✅ ATS & Export"])
     with t1: render_tab_overview(res)
     with t2: render_tab_roadmap(res)
@@ -2070,7 +2263,8 @@ def render_footer():
     sem_c = "#4ade80" if SEMANTIC else "#f59e0b"
     st.markdown(f"""
     <div class="sf-foot">
-      <span><span class="sf-fdot" style="background:#2dd4bf"></span>Groq</span>
+      <span><span class="sf-fdot" style="background:#2dd4bf"></span>Groq LLaMA 3.3</span>
+      <span><span class="sf-fdot" style="background:#2dd4bf"></span>Llama 4 Vision</span>
       <span><span class="sf-fdot" style="background:#2dd4bf"></span>NetworkX</span>
       <span><span class="sf-fdot" style="background:{sem_c}"></span>{'semantic ✓' if SEMANTIC else 'semantic ⟳'}</span>
       <span><span class="sf-fdot" style="background:#2dd4bf"></span>DuckDuckGo</span>
@@ -2081,6 +2275,29 @@ def render_footer():
 #  MAIN
 # =============================================================================
 def main():
+    # Inject toolbar-kill JS via components (st.markdown strips <script> tags)
+    try:
+        import streamlit.components.v1 as components
+        components.html("""<script>
+(function(){
+  var SEL=[
+    '[data-testid="stToolbar"]','[data-testid="stDecoration"]',
+    '[data-testid="stStatusWidget"]','[data-testid="stAppDeployButton"]',
+    '[data-testid="stBaseButton-header"]','[data-testid="stBaseButton-minimal"]',
+    'button[kind="header"]','button[kind="minimal"]','#stDecoration','#MainMenu'
+  ];
+  function kill(){
+    SEL.forEach(function(s){document.querySelectorAll(s).forEach(function(e){e.remove();})});
+    var h=document.querySelector('header[data-testid="stHeader"]');
+    if(h){h.style.cssText='display:none!important;height:0!important;min-height:0!important;';}
+  }
+  kill();
+  new MutationObserver(kill).observe(document.documentElement,{childList:true,subtree:true});
+  [500,1500,3000].forEach(function(t){setTimeout(kill,t);});
+})();
+</script>""", height=0, scrolling=False)
+    except Exception:
+        pass
     st.markdown(CSS, unsafe_allow_html=True)
     _init_state()
     step = st.session_state.get("step","input")
