@@ -1,5 +1,5 @@
 # =============================================================================
-#  main.py — SkillForge v9  |  All bugs fixed · Enhanced image resume analysis
+#  main.py — SkillForge v10  |  All bugs fixed · PDF upload · None-safe · Production ready
 #  Run: streamlit run main.py
 # =============================================================================
 
@@ -504,30 +504,45 @@ def search_real_salary(role: str, location: str) -> dict:
         system="Extract structured salary info from web snippets. Return JSON only.",
         model=MODEL_FAST, max_tokens=400,
     )
-    return r if ("error" not in r and r.get("median_lpa",0) > 0) else {}
+    median = r.get("median_lpa", 0)
+    return r if ("error" not in r and isinstance(median, (int, float)) and median > 0) else {}
+
+def _is_english(text: str) -> bool:
+    """Return True if text is mostly ASCII/English."""
+    if not text: return True
+    ascii_chars = sum(1 for c in text if ord(c) < 128)
+    return ascii_chars / max(len(text), 1) > 0.75
 
 def search_course_links(skill: str) -> List[dict]:
-    results = ddg_search(f'"{skill}" online course 2025 coursera OR udemy OR youtube', max_results=6)
+    # Force English results by adding language hints to query
+    results = ddg_search(
+        f'{skill} online course english 2024 2025 site:coursera.org OR site:udemy.com OR site:youtube.com OR site:edx.org',
+        max_results=8
+    )
     courses = []
     for r in results:
-        url  = r.get("href","")
-        body = r.get("body","")
-        if not url: continue
+        url   = r.get("href","")
+        title = r.get("title","")
+        body  = r.get("body","")
+        if not url or not title: continue
+        # Skip non-English titles
+        if not _is_english(title): continue
         if   "coursera.org" in url: plat, icon = "Coursera", "🎓"
         elif "udemy.com"    in url: plat, icon = "Udemy",    "🎯"
         elif "youtube.com"  in url: plat, icon = "YouTube",  "▶"
         elif "edx.org"      in url: plat, icon = "edX",      "📘"
         elif "linkedin.com" in url: plat, icon = "LinkedIn", "💼"
         else: continue
-        courses.append({"title":r.get("title","")[:65],"url":url,
-                        "platform":plat,"icon":icon,"snippet":body[:100]})
-    return courses[:3]
+        courses.append({"title":title[:65],"url":url,
+                        "platform":plat,"icon":icon,"snippet":body[:120]})
+    return courses[:4]
 
 def search_skill_trends(skills: List[str]) -> Dict[str, str]:
     if not skills: return {}
     query = " ".join(skills[:6])
-    results = ddg_search(f"most in-demand skills 2025 2026 hiring {query}", max_results=4)
-    text = " ".join([r.get("body","") for r in results]).lower()
+    results = ddg_search(f"most in-demand tech skills 2025 hiring india {query}", max_results=5)
+    # Use only English results
+    text = " ".join([r.get("body","") for r in results if _is_english(r.get("body",""))]).lower()
     out = {}
     for skill in skills:
         sl = skill.lower()
@@ -536,13 +551,16 @@ def search_skill_trends(skills: List[str]) -> Dict[str, str]:
     return out
 
 def search_job_market(role: str) -> List[str]:
-    results = ddg_search(f'"{role}" job market hiring trends 2025 2026', max_results=4)
+    results = ddg_search(f'{role} job market hiring demand 2025 india', max_results=5)
     if not results: return []
-    snippets = "\n".join([r.get("body","")[:300] for r in results[:4]])
+    # Filter to English snippets only
+    eng_snippets = [r.get("body","")[:300] for r in results[:5] if _is_english(r.get("body",""))]
+    if not eng_snippets: return []
+    snippets = "\n".join(eng_snippets[:4])
     r = _groq_call(
-        f'Based on these search results about "{role}" job market, give 3 short specific insights.\n\n'
+        f'Based on these search results about "{role}" job market, give 3 short specific insights in English.\n\n'
         f'{snippets}\n\nReturn JSON: {{"insights":["<insight1>","<insight2>","<insight3>"]}}',
-        system="Job market analyst. Return JSON only.", model=MODEL_FAST, max_tokens=300,
+        system="Job market analyst. Give insights in English only. Return JSON only.", model=MODEL_FAST, max_tokens=300,
     )
     return r.get("insights",[]) if "error" not in r else []
 
@@ -586,6 +604,8 @@ def _match_skill(skill: str) -> int:
     return best_i if best_s >= 0.4 else -1
 
 def skill_decay(p, yr):
+    p  = p  or 0   # guard None from LLM
+    yr = yr or 0   # guard None from LLM
     if yr <= 0 or yr >= CURRENT_YEAR - 1: return p, False
     yrs = CURRENT_YEAR - yr
     if yrs <= 2: return p, False
@@ -601,7 +621,7 @@ def analyze_gap(candidate, jd):
         status, prof, ctx, dec, orig = "Missing", 0, "", False, 0
         src = rs.get(sl) or next((v for k,v in rs.items() if sl in k or k in sl), None)
         if src:
-            raw_p = src.get("proficiency", 0); prof, dec = skill_decay(raw_p, src.get("year_last_used", 0))
+            raw_p = src.get("proficiency", 0) or 0; prof, dec = skill_decay(raw_p, src.get("year_last_used", 0) or 0)
             orig, ctx = raw_p, src.get("context",""); status = "Known" if prof >= 7 else "Partial"
         idx = _match_skill(skill)
         demand = MARKET_DEMAND.get(sl, MARKET_DEMAND.get(skill.lower(), 1))
@@ -652,7 +672,7 @@ def build_path(gp, c, jd=None):
         path.append({**co,
                      "gap_skill":  g.get("skill", co["skill"]),
                      "gap_status": g.get("status","Prereq"),
-                     "priority":   (0 if g.get("is_required") else 1, g.get("proficiency",0)),
+                     "priority":   (0 if g.get("is_required") else 1, g.get("proficiency",0) or 0),
                      "reasoning":  "",
                      "is_critical":cid in crit,
                      "demand":     g.get("demand", 1),
@@ -661,7 +681,7 @@ def build_path(gp, c, jd=None):
 
 def calc_impact(gp, path):
     tot = len(gp); known = sum(1 for g in gp if g["status"]=="Known")
-    covered = len({m["gap_skill"] for m in path}); rhrs = sum(m["duration_hrs"] for m in path)
+    covered = len({m["gap_skill"] for m in path}); rhrs = sum(m.get("duration_hrs",0) or 0 for m in path)
     cur  = min(100, round(known/max(tot,1)*100))
     proj = min(100, round((known+covered)/max(tot,1)*100))
     return {"total_skills":tot,"known_skills":known,"gaps_addressed":covered,
@@ -688,7 +708,7 @@ def weekly_plan(path, hpd=2.0):
     cap = max(hpd, 0.5) * 5  # FIX: guard against 0
     weeks, cur, hrs, wn = [], [], 0.0, 1
     for m in path:
-        rem = float(m["duration_hrs"])
+        rem = float(m.get("duration_hrs",0) or 0)
         while rem > 0:
             avail = cap - hrs
             if avail <= 0:
@@ -699,13 +719,13 @@ def weekly_plan(path, hpd=2.0):
             if ex: ex["hrs_this_week"] += chunk
             else:  cur.append({"id":m["id"],"title":m["title"],"level":m["level"],
                                 "domain":m["domain"],"is_critical":m.get("is_critical",False),
-                                "hrs_this_week":chunk,"total_hrs":m["duration_hrs"]})
+                                "hrs_this_week":chunk,"total_hrs":m.get("duration_hrs",0) or 0})
             hrs += chunk; rem -= chunk
     if cur: weeks.append({"week":wn,"modules":cur,"total_hrs":hrs})
     return weeks
 
 def transfer_map_calc(c, gp):
-    known = {g["skill"].lower() for g in c.get("skills",[]) if g.get("proficiency",0) >= 6}
+    known = {g["skill"].lower() for g in c.get("skills",[]) if (g.get("proficiency",0) or 0) >= 6}
     out = []
     for g in gp:
         if g["status"] == "Known": continue
@@ -721,9 +741,9 @@ def roi_rank(gp, path):
     out = []
     for m in path:
         g = next((x for x in gp if x["skill"]==m.get("gap_skill")), {})
-        roi = round((g.get("demand",1)*(1.5 if g.get("is_required") else 1)*10)/max(m["duration_hrs"],1), 2)
+        roi = round((g.get("demand",1)*(1.5 if g.get("is_required") else 1)*10)/max(m.get("duration_hrs",1) or 1,1), 2)
         out.append({"id":m["id"],"title":m["title"],"skill":m["skill"],"roi":roi,
-                    "hrs":m["duration_hrs"],"is_required":g.get("is_required",False)})
+                    "hrs":m.get("duration_hrs",0) or 0,"is_required":g.get("is_required",False)})
     return sorted(out, key=lambda x: x["roi"], reverse=True)
 
 def weeks_ready(hrs, hpd):
@@ -861,7 +881,7 @@ def radar_chart(gp):
     fig = go.Figure(data=[
         go.Scatterpolar(r=[10]*len(items), theta=theta, fill="toself",
                         name="Required", line=dict(color=_RED,width=1), opacity=0.08),
-        go.Scatterpolar(r=[g["proficiency"] for g in items], theta=theta, fill="toself",
+        go.Scatterpolar(r=[g.get("proficiency") or 0 for g in items], theta=theta, fill="toself",
                         name="Current", line=dict(color=_TEAL,width=2.5), opacity=0.7),
     ])
     fig.update_layout(**_bl(height=320),
@@ -882,7 +902,7 @@ def timeline_chart(path):
         k = "Critical" if m.get("is_critical") else m["level"]
         show = k not in shown; shown.add(k)
         fig.add_trace(go.Bar(
-            x=[m["duration_hrs"]], y=[m["title"][:30]],
+            x=[m.get("duration_hrs",0) or 0], y=[m["title"][:30]],
             orientation="h",
             marker=dict(color=lc.get(k,"#64748b"), opacity=0.85, line=dict(width=0)),
             name=k, legendgroup=k, showlegend=show,
@@ -897,8 +917,14 @@ def timeline_chart(path):
     return fig
 
 def salary_chart(s):
-    if not s or not s.get("median_lpa"): return go.Figure()
-    vals  = [s.get("min_lpa",0), s.get("median_lpa",0), s.get("max_lpa",0)]
+    if not s: return go.Figure()
+    try: _med = float(s.get("median_lpa") or 0)
+    except: _med = 0
+    if _med <= 0: return go.Figure()
+    def _to_num(v): 
+        try: return float(v or 0)
+        except: return 0.0
+    vals  = [_to_num(s.get("min_lpa",0)), _to_num(s.get("median_lpa",0)), _to_num(s.get("max_lpa",0))]
     curr  = s.get("currency","INR")
     sym   = "₹" if curr=="INR" else "$"
     unit  = "L/yr" if curr=="INR" else "k/yr"
@@ -1447,7 +1473,7 @@ def _init_state():
         "resume_image":   None,
         "jd_text":        "",
         "result":         None,
-        "completed":      [],      # FIX Bug 3: list not set
+        "completed":      [],
         "hpd":            2,
         "rw_result":      None,
         "course_cache":   {},
@@ -1455,6 +1481,10 @@ def _init_state():
         "force_fresh":    False,
         "search_query":   "",
         "search_results": [],
+        "_resume_hash":   "",
+        "_resume_source": "",
+        "_resume_fname":  "",
+        "_jd_source":     "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1464,13 +1494,34 @@ _RESET_KEYS = [
     "step","resume_text","resume_image","jd_text","result","completed",
     "rw_result","course_cache","force_fresh","search_query","search_results",
     "res_paste","jd_paste","_resume_source","_resume_fname","_jd_source",
-    "search_input","hpd_s",
+    "search_input","hpd_s","_resume_hash",
 ]
 
 def _full_reset():
     for k in _RESET_KEYS:
         if k in st.session_state: del st.session_state[k]
     st.rerun()
+
+def _parse_bytes(raw_bytes: bytes, filename: str):
+    """Parse resume from raw bytes. Returns (text, image_b64)."""
+    name = filename.lower()
+    if name.endswith(".pdf"):
+        try:
+            with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
+                return "\n".join(p.extract_text() or "" for p in pdf.pages), None
+        except Exception as e:
+            return f"[PDF error: {e}]", None
+    if name.endswith(".docx"):
+        try:
+            doc = Document(io.BytesIO(raw_bytes))
+            return "\n".join(p.text for p in doc.paragraphs), None
+        except Exception as e:
+            return f"[DOCX error: {e}]", None
+    if any(name.endswith(x) for x in [".jpg",".jpeg",".png",".webp"]):
+        media = ("image/jpeg" if name.endswith((".jpg",".jpeg"))
+                 else "image/png" if name.endswith(".png") else "image/webp")
+        return "", f"data:{media};base64,{base64.b64encode(raw_bytes).decode()}"
+    return raw_bytes.decode("utf-8", errors="ignore"), None
 
 # =============================================================================
 #  TOPBAR
@@ -1493,37 +1544,22 @@ def render_topbar():
 def render_input():
     st.markdown('<div class="sf-page">', unsafe_allow_html=True)
 
-    # ── Hero ──────────────────────────────────────────────────
     st.markdown("""
     <div class="sf-hero">
       <div class="sf-eyebrow">ARTPARK CodeForge Hackathon · AI Adaptive Onboarding Engine</div>
       <div class="sf-h1">Skip what you know.<br><span>Learn what you need.</span></div>
-      <div class="sf-sub">Upload your resume and target job description. SkillForge maps your exact skill gap and generates a dependency-ordered, personalized learning roadmap — cutting generic 60-hour onboarding down to only what matters.</div>
+      <div class="sf-sub">Upload your resume and target job description. SkillForge maps your exact skill gap and generates a dependency-ordered, personalized learning roadmap.</div>
     </div>""", unsafe_allow_html=True)
 
-    # ── How it works strip ────────────────────────────────────
     st.markdown("""
     <div class="sf-how">
-      <div class="sf-how-step">
-        <div class="sf-how-num">01</div>
-        <div class="sf-how-title">Upload Resume + JD</div>
-        <div class="sf-how-sub">PDF, DOCX, or image — Vision AI reads it all</div>
-      </div>
+      <div class="sf-how-step"><div class="sf-how-num">01</div><div class="sf-how-title">Upload Resume + JD</div><div class="sf-how-sub">PDF, DOCX, or image — Vision AI reads it all</div></div>
       <div class="sf-how-arrow">→</div>
-      <div class="sf-how-step">
-        <div class="sf-how-num">02</div>
-        <div class="sf-how-title">AI Maps Your Gap</div>
-        <div class="sf-how-sub">Groq LLaMA extracts skills · detects decay · scores proficiency</div>
-      </div>
+      <div class="sf-how-step"><div class="sf-how-num">02</div><div class="sf-how-title">AI Maps Your Gap</div><div class="sf-how-sub">Groq LLaMA extracts skills · detects decay · scores proficiency</div></div>
       <div class="sf-how-arrow">→</div>
-      <div class="sf-how-step">
-        <div class="sf-how-num">03</div>
-        <div class="sf-how-title">Get Your Roadmap</div>
-        <div class="sf-how-sub">NetworkX DAG orders modules by dependency — zero redundancy</div>
-      </div>
+      <div class="sf-how-step"><div class="sf-how-num">03</div><div class="sf-how-title">Get Your Roadmap</div><div class="sf-how-sub">NetworkX DAG orders modules by dependency — zero redundancy</div></div>
     </div>""", unsafe_allow_html=True)
 
-    # ── Stats strip ───────────────────────────────────────────
     st.markdown("""
     <div class="sf-stats-strip">
       <div class="sf-stat"><span class="sf-stat-n">47</span><span class="sf-stat-l">Courses in catalog</span></div>
@@ -1532,17 +1568,15 @@ def render_input():
       <div class="sf-stat-div"></div>
       <div class="sf-stat"><span class="sf-stat-n">~38h</span><span class="sf-stat-l">Avg hours saved</span></div>
       <div class="sf-stat-div"></div>
-      <div class="sf-stat"><span class="sf-stat-n">0</span><span class="sf-stat-l">Hallucinations — catalog-only</span></div>
+      <div class="sf-stat"><span class="sf-stat-n">0</span><span class="sf-stat-l">Hallucinations</span></div>
     </div>""", unsafe_allow_html=True)
 
-    # ── Sample scenarios (domain-labeled for judges) ──────────
-    st.markdown('<div style="margin:20px 0 8px"><span class="sf-sample-lbl">Try a sample scenario →</span></div>', unsafe_allow_html=True)
+    # Sample buttons
+    st.markdown('<div style="margin:20px 0 8px"><span class="sf-sample-lbl">Try a sample →</span></div>', unsafe_allow_html=True)
     pc1, pc2, pc3, _ = st.columns([1,1,1,2])
-    domain_labels = ["💻 Tech Role", "🧠 Data / AI Role", "👔 Non-Tech Role"]
-    for col, key, dlbl in zip([pc1,pc2,pc3], SAMPLES, domain_labels):
+    for col, key, dlbl in zip([pc1,pc2,pc3], SAMPLES, ["💻 Tech Role","🧠 Data / AI Role","👔 Non-Tech Role"]):
         with col:
-            if st.button(f"{dlbl}", key=f"pre_{key}", use_container_width=True):
-                # Full wipe before loading sample — prevents old PDF data leaking
+            if st.button(dlbl, key=f"pre_{key}", use_container_width=True):
                 for wk in _RESET_KEYS:
                     if wk in st.session_state: del st.session_state[wk]
                 st.session_state["resume_text"]    = SAMPLES[key]["resume"]
@@ -1553,161 +1587,146 @@ def render_input():
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    resume_ready = bool(
-        st.session_state.get("resume_text","").strip() or
-        st.session_state.get("res_paste","").strip() or
-        st.session_state.get("resume_image")
-    )
-    jd_ready = bool(
-        st.session_state.get("jd_text","").strip() or
-        st.session_state.get("jd_paste","").strip()
-    )
-
     left, right = st.columns(2, gap="large")
 
-    # LEFT — Resume
+    # ── LEFT: Resume ──────────────────────────────────────
     with left:
-        ready_badge = '<span class="sf-ready-badge">✓ Ready</span>' if resume_ready else ''
-        st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">📄</span> Your resume {ready_badge}</div>', unsafe_allow_html=True)
+        src_flag = st.session_state.get("_resume_source","")
+        has_resume = bool(st.session_state.get("resume_text","").strip() or st.session_state.get("resume_image"))
+        badge = '<span class="sf-ready-badge">✓ Ready</span>' if has_resume else ''
+        st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">📄</span> Your resume {badge}</div>', unsafe_allow_html=True)
 
-        # FIX Bug 1: Unique tab labels for resume vs JD
-        r_tab_up, r_tab_paste = st.tabs(["📄 Upload Resume", "✏️ Paste Resume"])
-        with r_tab_up:
-            rf = st.file_uploader("Resume file", type=["pdf","docx","jpg","jpeg","png","webp"],
+        up_tab, paste_tab = st.tabs(["📄 Upload Resume", "✏️ Paste Resume"])
+
+        with up_tab:
+            rf = st.file_uploader("Resume", type=["pdf","docx","jpg","jpeg","png","webp"],
                                   key="res_file", label_visibility="collapsed")
-            if rf:
-                already_loaded = st.session_state.get("_resume_fname") == rf.name
-                if not already_loaded:
-                    # NEW file — parse it and clear any previous sample/result
-                    txt, img = parse_uploaded_file(rf)
-                    # Wipe previous sample data and result
-                    for k in ["result","rw_result","course_cache","res_paste"]:
-                        if k in st.session_state: del st.session_state[k]
-                    st.session_state["resume_text"]    = txt
-                    st.session_state["resume_image"]   = img
-                    st.session_state["_resume_source"] = "file"
-                    st.session_state["_resume_fname"]  = rf.name
-                # Show confirmation either way
-                img = st.session_state.get("resume_image")
-                txt = st.session_state.get("resume_text","")
-                if img:
-                    st.success(f"✓ {rf.name} (image resume — Llama 4 Vision will analyze)")
-                    st.image(rf, caption="Resume image uploaded", use_container_width=True)
-                    st.markdown('<div class="sf-img-hint">🔍 Llama 4 Scout Vision will OCR and extract all text, skills, experience, and education from this image</div>', unsafe_allow_html=True)
+            if rf is not None:
+                # Read bytes RIGHT NOW — this is the only reliable way
+                try:
+                    rf.seek(0)
+                    raw_bytes = rf.read()
+                except Exception:
+                    raw_bytes = b""
+
+                if raw_bytes:
+                    new_hash = hashlib.md5(raw_bytes).hexdigest()
+                    # Only re-parse if genuinely new file
+                    if new_hash != st.session_state.get("_resume_hash", ""):
+                        txt, img = _parse_bytes(raw_bytes, rf.name)
+                        # Wipe everything old
+                        for k in list(st.session_state.keys()):
+                            if k not in ("sal_location","force_fresh","hpd"):
+                                del st.session_state[k]
+                        _init_state()
+                        st.session_state["resume_text"]    = txt
+                        st.session_state["resume_image"]   = img
+                        st.session_state["_resume_source"] = "file"
+                        st.session_state["_resume_fname"]  = rf.name
+                        st.session_state["_resume_hash"]   = new_hash
+                        st.session_state["step"]           = "input"
+
+                    # Show status
+                    ss_txt = st.session_state.get("resume_text","")
+                    ss_img = st.session_state.get("resume_image")
+                    if ss_img:
+                        st.success(f"✓ {rf.name} — image loaded (Vision AI will analyze)")
+                        st.image(rf, use_container_width=True)
+                    elif ss_txt and not ss_txt.startswith("["):
+                        wc = len(ss_txt.split())
+                        st.success(f"✓ {rf.name} — {wc} words extracted")
+                        st.caption(f"Preview: {ss_txt[:200]}…")
+                    else:
+                        st.error(f"Could not read {rf.name}. Try paste or JPG/PNG.")
                 else:
-                    wc = len(txt.split()) if txt else 0
-                    st.success(f"✓ {rf.name} — {wc} words{'  ⚠ (no text extracted — try pasting)' if wc < 10 else ''}")
+                    st.error("File appears empty. Please try again.")
 
-        with r_tab_paste:
-            # Only pre-populate paste box if no file has been uploaded
-            # If a file was uploaded, resume_text belongs to the file — don't copy it to paste box
-            has_uploaded_file = bool(st.session_state.get("resume_image")) or bool(
-                st.session_state.get("resume_text","") and
-                "res_paste" not in st.session_state and
-                st.session_state.get("_resume_source") == "file"
-            )
-            if "res_paste" not in st.session_state and not has_uploaded_file:
-                st.session_state["res_paste"] = ""
-
-            def _sync_resume():
-                # Only sync paste to resume_text if user is actually using paste tab
-                val = st.session_state.get("res_paste","").strip()
-                if val:
-                    st.session_state["resume_text"] = val
+        with paste_tab:
+            if st.session_state.get("_resume_source") == "file":
+                st.info("📄 File loaded above. Type here to switch to pasted text.")
+                if st.button("Switch to paste mode", key="sw_paste"):
+                    for k in ["_resume_source","_resume_hash","_resume_fname","resume_text","resume_image","result","rw_result"]:
+                        st.session_state.pop(k, None)
+                    st.rerun()
+            else:
+                rp = st.text_area("Resume text", height=220,
+                                  placeholder="Paste your resume here...",
+                                  key="res_paste", label_visibility="collapsed")
+                if rp and rp.strip():
+                    st.session_state["resume_text"]    = rp.strip()
                     st.session_state["_resume_source"] = "paste"
+                    st.session_state["_resume_hash"]   = ""
+                    wc = len(rp.split())
+                    if wc > 5:
+                        st.markdown(f'<div class="sf-wc">{wc} words</div>', unsafe_allow_html=True)
 
-            st.text_area("Resume", height=220,
-                         placeholder="Name, experience, skills, education, projects…",
-                         key="res_paste", label_visibility="collapsed",
-                         on_change=_sync_resume)
-            wc = len(st.session_state.get("res_paste","").split())
-            if wc > 5:
-                st.markdown(f'<div class="sf-wc">{wc} words detected</div>', unsafe_allow_html=True)
-
-        if resume_ready:
+        if has_resume and src_flag == "file":
             st.markdown('<div class="sf-ghost" style="margin-top:8px">', unsafe_allow_html=True)
             if st.button("✕ Clear resume", key="clr_res"):
-                for k in ["resume_text","resume_image","res_paste","res_file",
-                          "_resume_source","_resume_fname"]:
-                    if k in st.session_state: del st.session_state[k]
-                st.session_state["resume_text"]  = ""
-                st.session_state["resume_image"] = None
+                for k in ["resume_text","resume_image","res_paste","_resume_source","_resume_fname","_resume_hash","result","rw_result"]:
+                    st.session_state.pop(k, None)
+                _init_state()
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
 
-    # RIGHT — Job Description
+    # ── RIGHT: JD ─────────────────────────────────────────
     with right:
-        ready_badge_jd = '<span class="sf-ready-badge">✓ Ready</span>' if jd_ready else ''
-        st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">💼</span> Job description {ready_badge_jd}</div>', unsafe_allow_html=True)
+        has_jd = bool(st.session_state.get("jd_text","").strip())
+        badge_jd = '<span class="sf-ready-badge">✓ Ready</span>' if has_jd else ''
+        st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">💼</span> Job description {badge_jd}</div>', unsafe_allow_html=True)
 
-        # FIX Bug 1: Unique tab labels for JD (different from resume tabs)
-        j_tab_up, j_tab_paste = st.tabs(["📤 Upload JD", "📝 Paste JD"])
-        with j_tab_up:
-            jf = st.file_uploader("JD file", type=["pdf","docx"], key="jd_file",
-                                  label_visibility="collapsed")
-            if jf:
-                txt2, _ = parse_uploaded_file(jf)
-                st.session_state["jd_text"]    = txt2
-                st.session_state["_jd_source"] = "file"
-                if "jd_paste" in st.session_state: del st.session_state["jd_paste"]
-                st.success(f"✓ {jf.name} — {len(txt2.split())} words")
+        jup_tab, jpaste_tab = st.tabs(["📤 Upload JD", "📝 Paste JD"])
 
-        with j_tab_paste:
-            if "jd_paste" not in st.session_state:
-                # Only pre-fill from jd_text if it came from paste (not file upload)
-                if st.session_state.get("_jd_source") != "file":
-                    st.session_state["jd_paste"] = st.session_state.get("jd_text","")
-                else:
-                    st.session_state["jd_paste"] = ""
+        with jup_tab:
+            jf = st.file_uploader("JD", type=["pdf","docx"], key="jd_file", label_visibility="collapsed")
+            if jf is not None:
+                try:
+                    jf.seek(0)
+                    jraw = jf.read()
+                except Exception:
+                    jraw = b""
+                if jraw:
+                    jtxt, _ = _parse_bytes(jraw, jf.name)
+                    if jtxt and not jtxt.startswith("["):
+                        for k in ["result","rw_result","course_cache"]:
+                            st.session_state.pop(k, None)
+                        st.session_state["jd_text"]    = jtxt
+                        st.session_state["_jd_source"] = "file"
+                        st.session_state["step"]       = "input"
+                        st.session_state.pop("jd_paste", None)
+                        st.success(f"✓ {jf.name} — {len(jtxt.split())} words")
+                    else:
+                        st.error(f"Could not read {jf.name}")
 
-            def _sync_jd():
-                val = st.session_state.get("jd_paste","").strip()
-                if val:
-                    st.session_state["jd_text"] = val
-                    st.session_state["_jd_source"] = "paste"
+        with jpaste_tab:
+            jp = st.text_area("Job description", height=220,
+                              placeholder="Paste the job description here...",
+                              key="jd_paste", label_visibility="collapsed")
+            if jp and jp.strip():
+                st.session_state["jd_text"]    = jp.strip()
+                st.session_state["_jd_source"] = "paste"
+                wc_jd = len(jp.split())
+                if wc_jd > 5:
+                    st.markdown(f'<div class="sf-wc">{wc_jd} words</div>', unsafe_allow_html=True)
 
-            st.text_area("Job description", height=220,
-                         placeholder="Role title, required & preferred skills, seniority level, responsibilities…",
-                         key="jd_paste", label_visibility="collapsed",
-                         on_change=_sync_jd)
-            wc_jd = len(st.session_state.get("jd_paste","").split())
-            if wc_jd > 5:
-                st.markdown(f'<div class="sf-wc">{wc_jd} words detected</div>', unsafe_allow_html=True)
-
-    # ── Options + Analyze ─────────────────────────────────────────────────────
+    # ── Analyze button ─────────────────────────────────────
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-
     opt1, opt2, _, btn_col = st.columns([1, 1.2, 0.6, 1.6])
     with opt1:
-        loc_options = ["India","USA","UK","Germany","Canada","Singapore"]
-        loc_idx = loc_options.index(st.session_state.get("sal_location","India"))
-        st.selectbox("Salary location", loc_options, index=loc_idx,
+        st.selectbox("Salary location", ["India","USA","UK","Germany","Canada","Singapore"],
+                     index=["India","USA","UK","Germany","Canada","Singapore"].index(st.session_state.get("sal_location","India")),
                      key="sal_location", label_visibility="visible")
-        # FIX #16: key="sal_location" auto-syncs — no manual assignment needed
-
     with opt2:
-        # FIX Bug 5: key="force_fresh" auto-syncs — don't manually reassign after render
-        st.checkbox("Force fresh analysis (skip cache)", key="force_fresh")
+        st.checkbox("Force fresh (skip cache)", key="force_fresh")
 
     with btn_col:
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-        both_ready = resume_ready and jd_ready
-        if both_ready:
+        resume_ready = bool(st.session_state.get("resume_text","").strip() or st.session_state.get("resume_image"))
+        jd_ready     = bool(st.session_state.get("jd_text","").strip())
+        if resume_ready and jd_ready:
             is_img = bool(st.session_state.get("resume_image"))
-            btn_label = "Analyze resume image ⚡" if is_img else "Analyze skill gap ⚡"
-            if st.button(btn_label, key="go_btn", use_container_width=True):
-                # For file uploads, trust resume_text as-is (already set by uploader)
-                # For paste, fall back to res_paste
-                if st.session_state.get("_resume_source") != "file":
-                    st.session_state["resume_text"] = (
-                        st.session_state.get("resume_text","") or
-                        st.session_state.get("res_paste","")
-                    )
-                # JD: always fall back to paste if needed
-                st.session_state["jd_text"] = (
-                    st.session_state.get("jd_text","") or
-                    st.session_state.get("jd_paste","")
-                )
+            lbl = "Analyze resume image ⚡" if is_img else "Analyze skill gap ⚡"
+            if st.button(lbl, key="go_btn", use_container_width=True):
                 st.session_state["step"] = "analyzing"
                 st.rerun()
         else:
@@ -1718,6 +1737,8 @@ def render_input():
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+
+
 # =============================================================================
 #  LOADING
 # =============================================================================
@@ -1725,113 +1746,81 @@ def render_loading():
     st.markdown('<div class="sf-page">', unsafe_allow_html=True)
     st.markdown("<div style='height:48px'></div>", unsafe_allow_html=True)
 
-    # Clear cache if force_fresh requested — uses SAME key format as run_analysis
-    if st.session_state.get("force_fresh"):
-        rtxt = st.session_state.get("resume_text","")
-        rimg = st.session_state.get("resume_image","")
-        jtxt = st.session_state.get("jd_text","")
-        # Build cache_k using same logic as run_analysis
-        if rtxt and rtxt.strip():
-            cache_k = "txt:" + hashlib.md5(rtxt.encode()).hexdigest()
-        elif rimg:
-            cache_k = "img:" + hashlib.md5(rimg.encode()).hexdigest()
-        else:
-            cache_k = "empty"
+    resume_text = st.session_state.get("resume_text","")
+    resume_img  = st.session_state.get("resume_image")
+    jd_text     = st.session_state.get("jd_text","") or st.session_state.get("jd_paste","")
+    source      = st.session_state.get("_resume_source","paste")
+
+    if not resume_text.strip() and not resume_img:
+        st.error("No resume data. Please go back and upload your resume.")
+        if st.button("Go back", key="back_no_resume"):
+            st.session_state["step"] = "input"; st.rerun()
+        return
+
+    if not jd_text.strip():
+        st.error("No job description. Please go back and add one.")
+        if st.button("Go back", key="back_no_jd"):
+            st.session_state["step"] = "input"; st.rerun()
+        return
+
+    if source == "file" or st.session_state.get("force_fresh"):
         try:
+            ck = ("txt:" + hashlib.md5(resume_text.encode()).hexdigest()) if resume_text.strip() else                  ("img:" + hashlib.md5((resume_img or "").encode()).hexdigest())
             with shelve.open(_CACHE_PATH) as db:
-                k = _ckey(cache_k, jtxt)
-                if k in db: del db[k]
+                kk = _ckey(ck, jd_text)
+                if kk in db: del db[kk]
         except: pass
         st.session_state.pop("force_fresh", None)
 
-    is_image_resume = bool(st.session_state.get("resume_image"))
-
-    # ── Animated progress steps ───────────────────────────────
     steps = [
-        ("📄", "Parsing resume & job description",     "Extracting text, structure, and metadata"),
-        ("🔍", "Extracting skills with proficiency",    "Scoring 0–10 per skill · detecting decay"),
-        ("🧩", "Computing skill gap",                   "Known · Partial · Missing classification"),
-        ("🗺️", "Building dependency roadmap",           "NetworkX DAG · topological sort · critical path"),
-        ("🌐", "Fetching live market data",             "Salary · trends · job market via DuckDuckGo"),
+        ("📄","Parsing resume & job description","Extracting text, structure, metadata"),
+        ("🔍","Extracting skills with proficiency","Scoring 0-10 per skill, detecting decay"),
+        ("🧩","Computing skill gap","Known, Partial, Missing classification"),
+        ("🗺","Building dependency roadmap","NetworkX DAG, topological sort"),
+        ("🌐","Fetching live market data","Salary, trends, job market via DuckDuckGo"),
     ]
-    st.markdown("""
-    <div style="max-width:560px;margin:40px auto 32px">
+    st.markdown("""<div style="max-width:560px;margin:40px auto 32px">
       <div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--teal);margin-bottom:20px">Analyzing your profile</div>
     </div>""", unsafe_allow_html=True)
+    slots = [st.empty() for _ in steps]
+    prog  = st.empty()
 
-    step_slots = [st.empty() for _ in steps]
-    prog_slot  = st.empty()
-
-    def render_steps(done_count):
+    def show_steps(done):
         for i,(icon,title,sub) in enumerate(steps):
-            if i < done_count:
-                s = f'<div class="sf-lstep sf-lstep-done"><span class="sf-lstep-icon">✓</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
-            elif i == done_count:
-                s = f'<div class="sf-lstep sf-lstep-active"><span class="sf-lstep-icon sf-lstep-spin">{icon}</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
-            else:
-                s = f'<div class="sf-lstep sf-lstep-wait"><span class="sf-lstep-icon">○</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
-            step_slots[i].markdown(s, unsafe_allow_html=True)
-        pct = int(done_count / len(steps) * 100)
-        prog_slot.markdown(f'<div class="sf-lprog"><div class="sf-lprog-fill" style="width:{pct}%"></div></div>', unsafe_allow_html=True)
+            if   i < done:  s = f'<div class="sf-lstep sf-lstep-done"><span class="sf-lstep-icon">✓</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
+            elif i == done: s = f'<div class="sf-lstep sf-lstep-active"><span class="sf-lstep-icon sf-lstep-spin">{icon}</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
+            else:           s = f'<div class="sf-lstep sf-lstep-wait"><span class="sf-lstep-icon">○</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
+            slots[i].markdown(s, unsafe_allow_html=True)
+        prog.markdown(f'<div class="sf-lprog"><div class="sf-lprog-fill" style="width:{int(done/len(steps)*100)}%"></div></div>', unsafe_allow_html=True)
 
-    render_steps(0)
-
-    # Use resume_text from session state — for file uploads this is the parsed PDF text
-    # For paste, it comes from res_paste via _sync_resume
-    # Never fall back to res_paste if a file was uploaded (would overwrite with empty string)
-    source = st.session_state.get("_resume_source", "paste")
-    if source == "file":
-        resume_text = st.session_state.get("resume_text", "")
-    else:
-        resume_text = (
-            st.session_state.get("resume_text","") or
-            st.session_state.get("res_paste","")
-        )
-    jd_text = (
-        st.session_state.get("jd_text","") or
-        st.session_state.get("jd_paste","")
-    )
-
-    # Safety check — warn if resume_text is suspiciously short for a PDF
-    fname = st.session_state.get("_resume_fname","")
-    if fname and len(resume_text.strip()) < 50:
-        st.warning(f"⚠ Could not extract text from {fname}. Try pasting the text manually.")
-
-    render_steps(1)
+    show_steps(0)
     result = run_analysis_with_web(
-        resume_text,
-        jd_text,
-        resume_image_b64=st.session_state.get("resume_image"),
+        resume_text, jd_text,
+        resume_image_b64=resume_img,
         location=st.session_state.get("sal_location","India"),
     )
     if "error" not in result:
-        render_steps(3)
-        render_steps(4)
-        render_steps(5)
+        show_steps(3); show_steps(4); show_steps(5)
 
     if "error" in result:
         err = result.get("error","unknown")
-        if result.get("error") == "rate_limited":
-            st.error(f"⏳ Rate limited — {result.get('message','')}")
-            st.info("Wait the indicated time then retry.")
-        elif "vision" in str(err).lower() or "model" in str(err).lower():
-            st.error(f"Vision model error: `{err}`")
-            st.info("The vision model (Llama 4 Scout) may not be available on your Groq plan. Try pasting resume text instead.")
+        if err == "rate_limited":
+            st.error(f"Rate limited — {result.get('message','')}")
+        elif "vision" in str(err).lower():
+            st.error(f"Vision model error: {err}")
+            st.info("Try pasting resume text instead.")
         else:
-            st.error(f"Analysis failed: `{err}`")
+            st.error(f"Analysis failed: {err}")
         st.markdown('<div class="sf-ghost">', unsafe_allow_html=True)
-        if st.button("← Back", key="retry"):
+        if st.button("Back", key="retry_btn"):
             st.session_state["step"] = "input"; st.rerun()
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div></div>", unsafe_allow_html=True)
         return
 
     st.session_state["result"] = result
     st.session_state["step"]   = "results"
     st.rerun()
-    st.markdown("</div>", unsafe_allow_html=True)
 
-# =============================================================================
 #  RESULTS: SCORE BANNER
 # =============================================================================
 def render_banner(res):
@@ -1845,11 +1834,11 @@ def render_banner(res):
     sen    = c.get("seniority","")
     trole  = jd.get("role_title","")
 
-    cur   = im["current_fit"]
-    proj  = im["projected_fit"]
-    delta = im["fit_delta"]
+    cur   = im.get("current_fit", 0)  or 0
+    proj  = im.get("projected_fit", 0) or 0
+    delta = im.get("fit_delta", 0)       or 0
     iv_c  = iv.get("color","#4ade80")
-    ats   = ql.get("ats_score", 0)
+    ats   = ql.get("ats_score", 0) or 0
     grade = ql.get("overall_grade","–")
 
     fit_c = _RED if cur < 40 else _AMBER if cur < 65 else _GREEN
@@ -1878,7 +1867,7 @@ def render_banner(res):
           <span style="color:{fit_c}">{cur}%</span>
           <span style="color:var(--t3);margin:0 10px">→</span>
           <span style="color:var(--green)">{proj}%</span>
-          <span style="color:var(--t3);margin-left:10px">· Complete in {weeks_ready(im["roadmap_hours"], hpd_val)} at {hpd_val}h/day</span>
+          <span style="color:var(--t3);margin-left:10px">· Complete in {weeks_ready(im.get("roadmap_hours",0) or 0, hpd_val)} at {hpd_val}h/day</span>
         </div>
       </div>
 
@@ -1909,9 +1898,9 @@ def render_banner(res):
     </div>""", unsafe_allow_html=True)
 
     k1,k2,k3,k4 = st.columns(4)
-    k1.metric("Modules",          im["modules_count"],          f"{im['critical_count']} critical path")
+    k1.metric("Modules",          im.get("modules_count",0),    f"{im.get('critical_count',0)} critical path")
     k2.metric("Hours saved",      f"~{im['hours_saved']}h",     "vs 60h generic onboarding")
-    k3.metric("Done in",          weeks_ready(im["roadmap_hours"], hpd_val), f"at {hpd_val}h/day")
+    k3.metric("Done in",          weeks_ready(im.get("roadmap_hours",0) or 0, hpd_val), f"at {hpd_val}h/day")
     k4.metric("Skills covered",   f"{im['gaps_addressed']}/{im['total_skills']}", f"{im['known_skills']} already known — skipped")
 
     sm = res.get("seniority",{})
@@ -1958,7 +1947,7 @@ def render_tab_overview(res):
             col_c    = col_map[s]
             bc       = bc_map[s]
             cls      = s.lower()
-            pct      = g["proficiency"]/10*100
+            pct      = (g.get("proficiency", 0) or 0)/10*100
             req      = "★ " if g["is_required"] else ""
             trend    = trends.get(g["skill"],"")
             tc       = (_RED if "Hot" in trend else _AMBER if "Growing" in trend else "#3d4d66")
@@ -2026,7 +2015,7 @@ def render_tab_roadmap(res):
                                value=st.session_state.get("hpd",2), key="hpd_s",
                                label_visibility="visible")
         st.session_state["hpd"] = hpd  # safe: different key than widget "hpd_s"
-        rem = sum(m["duration_hrs"] for m in path if m["id"] not in completed)
+        rem = sum(m.get("duration_hrs",0) or 0 for m in path if m["id"] not in completed)
         st.markdown(f'<p style="font-family:var(--mono);font-size:0.72rem;color:var(--t2);text-align:right">{rem}h left · done in <strong style="color:var(--teal)">{weeks_ready(rem,hpd)}</strong></p>', unsafe_allow_html=True)
 
     mod_col, chart_col = st.columns([1.1,1], gap="large")
@@ -2040,7 +2029,7 @@ def render_tab_roadmap(res):
         idx = 0
         for phase_name, mods in phases:
             if not mods: continue
-            phase_hrs = sum(m["duration_hrs"] for m in mods)
+            phase_hrs = sum(m.get("duration_hrs",0) or 0 for m in mods)
             st.markdown(f'<div class="sf-phase-hd">{phase_name} &nbsp; <span style="font-weight:400;color:var(--t4)">{len(mods)} modules · {phase_hrs}h</span></div>', unsafe_allow_html=True)
 
             for m in mods:
@@ -2086,7 +2075,7 @@ def render_tab_roadmap(res):
                     f'      <div class="sf-mod-tags">{tags_html}</div>' +
                     f'      {reason_html}' +
                     f'    </div>' +
-                    f'    <div class="sf-mod-hrs">{m["duration_hrs"]}h</div>' +
+                    f'    <div class="sf-mod-hrs">{m.get("duration_hrs",0) or 0}h</div>' +
                     f'  </div>' +
                     f'</div>',
                     unsafe_allow_html=True
@@ -2226,12 +2215,15 @@ def render_tab_research(res):
     if _DDG_ERROR:
         st.warning(f"⚠ {_DDG_ERROR}")
     if results:
-        st.markdown(f'<div style="font-family:var(--mono);font-size:0.68rem;color:var(--t3);margin:10px 0 8px">{len(results)} results for "{st.session_state.get("search_query","")}"</div>', unsafe_allow_html=True)
-        for r in results:
+        # Filter non-English results
+        eng_results = [r for r in results if _is_english(r.get("title","")) and _is_english(r.get("body",""))]
+        shown = eng_results if eng_results else results  # fallback to all if none pass
+        st.markdown(f'<div style="font-family:var(--mono);font-size:0.68rem;color:var(--t3);margin:10px 0 8px">{len(shown)} results for "{st.session_state.get("search_query","")}"</div>', unsafe_allow_html=True)
+        for r in shown:
             href  = r.get("href","")
             title = r.get("title","No title")
             body  = r.get("body","")[:200]
-            domain = href.split("/")[2] if href.count("/") >= 2 else href  # FIX: safer split
+            domain = href.split("/")[2] if href.count("/") >= 2 else href
             st.markdown(f"""
             <div class="sf-search-result">
               <a class="sf-search-title" href="{href}" target="_blank">{title}</a>
@@ -2246,15 +2238,21 @@ def render_tab_research(res):
     sal_col, mkt_col = st.columns(2, gap="large")
     with sal_col:
         st.markdown('<div style="font-size:0.9rem;font-weight:600;color:var(--t1);margin-bottom:10px">Salary benchmark</div>', unsafe_allow_html=True)
-        if sal and sal.get("median_lpa",0):
+        _sal_val = sal.get("median_lpa",0) if sal else 0
+        try: _sal_val = float(_sal_val or 0)
+        except: _sal_val = 0
+        if sal and _sal_val > 0:
             st.plotly_chart(salary_chart(sal), use_container_width=True, config={"displayModeBar":False})
             st.caption(f"Source: {sal.get('source','web')} · {sal.get('note','')}")
         else:
-            st.markdown('<p style="font-family:var(--mono);font-size:0.75rem;color:var(--t3)">Not available — fetch below:</p>', unsafe_allow_html=True)
+            st.markdown('<p style="font-family:var(--mono);font-size:0.75rem;color:var(--t3)">Salary data not available — fetch it:</p>', unsafe_allow_html=True)
             loc2 = st.selectbox("Location", ["India","USA","UK","Germany","Canada","Singapore"], key="sal_loc2")
-            if st.button("Fetch salary", key="sal_fetch"):
-                with st.spinner("Searching…"):
-                    st.session_state["result"]["salary"] = search_real_salary(role_name, loc2)
+            if st.button("🔍 Fetch salary data", key="sal_fetch", use_container_width=True):
+                with st.spinner("Searching salary data…"):
+                    _sal_new = search_real_salary(role_name, loc2)
+                    st.session_state["result"]["salary"] = _sal_new
+                if not _sal_new:
+                    st.warning("Could not find salary data. Try a different location or search manually above.")
                 st.rerun()
 
     with mkt_col:
@@ -2297,6 +2295,7 @@ def render_tab_research(res):
                     cc = st.session_state.get("course_cache",{})
                     cc[sel_s] = search_course_links(sel_s)
                     st.session_state["course_cache"] = cc
+                st.rerun()  # show results immediately
 
         cached = st.session_state.get("course_cache",{}).get(sel_s,[])
         if cached:
@@ -2320,7 +2319,7 @@ def render_tab_ats_export(res):
     st.markdown('<div class="sf-sh">ATS audit</div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-ss">Resume quality scores · improvement tips · ATS keyword gaps · interview talking points</div>', unsafe_allow_html=True)
 
-    ats_pct = ql.get("ats_score",0)
+    ats_pct = ql.get("ats_score",0) or 0
     st.markdown(f"""
     <div class="sf-ats-row">
       <div class="sf-ats-card"><div class="sf-ats-n">{ql.get('ats_score','–')}%</div><div class="sf-ats-l">ATS Score</div></div>
@@ -2407,7 +2406,7 @@ def render_tab_ats_export(res):
         st.markdown('<div class="sf-export-card">', unsafe_allow_html=True)
         st.markdown('<div class="sf-export-hd">PDF report</div><div class="sf-export-sub">Full roadmap · AI reasoning · ATS audit · scores</div>', unsafe_allow_html=True)
         for k,v in [("Candidate",c.get("name","–")),("Role",jd.get("role_title","–")),
-                    ("ATS score",f"{ql.get('ats_score','–')}%"),("Modules",im["modules_count"]),
+                    ("ATS score",f"{ql.get('ats_score','–')}%"),("Modules",im.get("modules_count",0)),
                     ("Training",f"{im['roadmap_hours']}h")]:
             st.markdown(f'<div class="sf-export-row"><span class="sf-ek">{k}</span><span class="sf-ev">{v}</span></div>', unsafe_allow_html=True)
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
@@ -2496,7 +2495,10 @@ def render_sidebar(res):
 # =============================================================================
 def render_results():
     res = st.session_state.get("result")
-    if not res: return
+    if not res:
+        st.session_state["step"] = "input"
+        st.rerun()
+        return
 
     render_sidebar(res)
 
@@ -2536,32 +2538,27 @@ def render_footer():
     </div>""", unsafe_allow_html=True)
 
 # =============================================================================
+
+# =============================================================================
 #  MAIN
 # =============================================================================
 def main():
-    # Inject toolbar-kill JS via components (st.markdown strips <script> tags)
     try:
         import streamlit.components.v1 as components
         components.html("""<script>
 (function(){
-  var SEL=[
-    '[data-testid="stToolbar"]','[data-testid="stDecoration"]',
-    '[data-testid="stStatusWidget"]','[data-testid="stAppDeployButton"]',
-    '[data-testid="stBaseButton-header"]','[data-testid="stBaseButton-minimal"]',
-    'button[kind="header"]','button[kind="minimal"]','#stDecoration','#MainMenu'
-  ];
-  function kill(){
-    SEL.forEach(function(s){document.querySelectorAll(s).forEach(function(e){e.remove();})});
+  var S=['[data-testid="stToolbar"]','[data-testid="stDecoration"]','[data-testid="stStatusWidget"]',
+         '[data-testid="stAppDeployButton"]','[data-testid="stBaseButton-header"]',
+         '[data-testid="stBaseButton-minimal"]','button[kind="header"]','button[kind="minimal"]',
+         '#stDecoration','#MainMenu'];
+  function k(){S.forEach(function(s){document.querySelectorAll(s).forEach(function(e){e.remove();});});
     var h=document.querySelector('header[data-testid="stHeader"]');
-    if(h){h.style.cssText='display:none!important;height:0!important;min-height:0!important;';}
-  }
-  kill();
-  new MutationObserver(kill).observe(document.documentElement,{childList:true,subtree:true});
-  [500,1500,3000].forEach(function(t){setTimeout(kill,t);});
+    if(h){h.style.cssText='display:none!important;height:0!important;';}}
+  k();new MutationObserver(k).observe(document.documentElement,{childList:true,subtree:true});
+  [500,1500,3000].forEach(function(t){setTimeout(k,t);});
 })();
 </script>""", height=0, scrolling=False)
-    except Exception:
-        pass
+    except: pass
     st.markdown(CSS, unsafe_allow_html=True)
     _init_state()
     step = st.session_state.get("step","input")
@@ -2571,7 +2568,6 @@ def main():
     elif step == "results":   render_results()
     render_footer()
 
-# =============================================================================
 #  CLI MODE
 # =============================================================================
 def cli_analyze(scenario_key):
