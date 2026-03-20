@@ -3,6 +3,7 @@
 #  UI:  Matches screenshot exactly — dark theme, 3-column card layout
 #  API: Groq key lives in .env ONLY — never exposed to frontend
 #  Run: streamlit run main.py
+#  FIX: Sample buttons now correctly populate text areas via session_state
 # =============================================================================
 
 import os, sys, json, io, re, time, hashlib, shelve, threading, argparse, base64
@@ -232,7 +233,7 @@ def _groq_call(prompt: str, system: str, model: str = MODEL_FAST,
     try:
         r = GROQ_CLIENT.chat.completions.create(
             model=model, messages=messages, temperature=0.1,
-            max_tokens=max_tokens, service_tier="auto",
+            max_tokens=max_tokens,
             response_format={"type":"json_object"},
         )
         usage   = r.usage
@@ -247,7 +248,7 @@ def _groq_call(prompt: str, system: str, model: str = MODEL_FAST,
             "in":in_tok,"out":out_tok,"cached":cached_c,
             "ms":round((time.time()-t0)*1000),
             "cost":cost,"status":"ok",
-            "tier":getattr(r,"service_tier","auto"),
+            "tier":"default",
         })
         return json.loads(r.choices[0].message.content or "{}")
     except json.JSONDecodeError as e:
@@ -727,13 +728,12 @@ def salary_chart(s: dict) -> go.Figure:
     return fig
 
 # =============================================================================
-#  STREAMLIT CSS — pixel-faithful to the screenshot
+#  STREAMLIT CSS
 # =============================================================================
 THEME_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
-/* ── Reset & base ── */
 *, *::before, *::after { box-sizing: border-box; }
 html, body, [class*="css"] {
     font-family: 'Plus Jakarta Sans', sans-serif !important;
@@ -747,12 +747,10 @@ footer { display: none !important; }
 #MainMenu { display: none !important; }
 header[data-testid="stHeader"] { display: none !important; }
 
-/* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #2a3a50; border-radius: 99px; }
 
-/* ── Navbar ── */
 .sf-nav {
     background: rgba(10,14,26,0.97);
     border-bottom: 1px solid rgba(255,255,255,0.07);
@@ -797,7 +795,6 @@ header[data-testid="stHeader"] { display: none !important; }
     cursor: pointer;
 }
 
-/* ── Hero section ── */
 .sf-hero {
     text-align: center;
     padding: 64px 24px 48px;
@@ -819,7 +816,6 @@ header[data-testid="stHeader"] { display: none !important; }
     line-height: 1.65;
 }
 
-/* ── Sample buttons row ── */
 .sf-samples {
     text-align: center;
     padding: 0 24px 32px;
@@ -831,82 +827,6 @@ header[data-testid="stHeader"] { display: none !important; }
     letter-spacing: 0.08em;
 }
 
-/* ── Input cards grid ── */
-.sf-cards-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr auto;
-    gap: 16px;
-    padding: 0 24px 32px;
-    max-width: 1200px;
-    margin: 0 auto;
-    align-items: start;
-}
-@media (max-width: 900px) {
-    .sf-cards-grid { grid-template-columns: 1fr; }
-}
-
-/* ── Card base ── */
-.sf-card {
-    background: #141c2e;
-    border: 1px solid rgba(255,255,255,0.07);
-    border-radius: 14px;
-    padding: 24px;
-    min-height: 260px;
-}
-.sf-card-title {
-    text-align: center;
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: #e6edf3;
-    margin-bottom: 16px;
-}
-.sf-card-icon {
-    text-align: center;
-    font-size: 1.6rem;
-    margin-bottom: 8px;
-    opacity: 0.9;
-}
-
-/* ── Upload zone (fake — Streamlit file_uploader is inside) ── */
-.sf-upload-zone {
-    border: 1.5px dashed rgba(78,205,196,0.3);
-    border-radius: 10px;
-    padding: 28px 16px;
-    text-align: center;
-    color: #8892a4;
-    font-size: 0.9rem;
-    background: rgba(78,205,196,0.03);
-    margin-bottom: 8px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-.sf-upload-zone:hover {
-    border-color: rgba(78,205,196,0.6);
-    background: rgba(78,205,196,0.06);
-}
-.sf-upload-zone a { color: #4ECDC4; text-decoration: underline; }
-.sf-upload-hint {
-    font-size: 0.72rem; color: #3d4f6b;
-    text-align: center; margin-top: 4px;
-}
-
-/* ── Analyze card ── */
-.sf-analyze-card {
-    background: #141c2e;
-    border: 1px solid rgba(255,255,255,0.07);
-    border-radius: 14px;
-    padding: 24px;
-    text-align: center;
-    min-width: 220px;
-}
-.sf-analyze-icon { font-size: 1.8rem; margin-bottom: 10px; }
-.sf-analyze-title {
-    font-size: 1.05rem; font-weight: 700;
-    color: #e6edf3; margin-bottom: 4px;
-}
-.sf-analyze-sub { font-size: 0.75rem; color: #4a5568; margin-bottom: 20px; }
-
-/* ── Streamlit widget overrides (match screenshot) ── */
 [data-testid="stFileUploadDropzone"] {
     background: rgba(78,205,196,0.03) !important;
     border: 1.5px dashed rgba(78,205,196,0.3) !important;
@@ -929,7 +849,6 @@ header[data-testid="stHeader"] { display: none !important; }
     font-family: 'Plus Jakarta Sans', sans-serif !important;
 }
 
-/* ── Streamlit buttons ── */
 .stButton > button {
     background: #4ECDC4 !important;
     border: none !important;
@@ -949,24 +868,7 @@ header[data-testid="stHeader"] { display: none !important; }
     box-shadow: 0 8px 24px rgba(78,205,196,0.3) !important;
 }
 .stButton > button:active { transform: translateY(0) !important; }
-/* Sample buttons — smaller secondary style */
-.sample-btn > button {
-    background: #1a2438 !important;
-    border: 1px solid rgba(255,255,255,0.1) !important;
-    color: #c9d1d9 !important;
-    font-size: 0.82rem !important;
-    font-weight: 500 !important;
-    padding: 8px 16px !important;
-    border-radius: 8px !important;
-}
-.sample-btn > button:hover {
-    border-color: rgba(78,205,196,0.4) !important;
-    color: #4ECDC4 !important;
-    transform: translateY(-1px) !important;
-    box-shadow: none !important;
-}
 
-/* ── Text areas ── */
 textarea {
     background: #0f1623 !important;
     border: 1px solid rgba(255,255,255,0.08) !important;
@@ -982,7 +884,6 @@ textarea:focus {
 }
 textarea::placeholder { color: #3d4f6b !important; }
 
-/* ── Tabs ── */
 .stTabs [data-baseweb="tab-list"] {
     background: transparent !important;
     border-bottom: 1px solid rgba(255,255,255,0.07) !important;
@@ -1004,7 +905,6 @@ textarea::placeholder { color: #3d4f6b !important; }
 }
 .stTabs [data-baseweb="tab-panel"] { padding-top: 20px !important; }
 
-/* ── Metrics ── */
 [data-testid="stMetric"] {
     background: #141c2e !important;
     border: 1px solid rgba(255,255,255,0.07) !important;
@@ -1025,7 +925,6 @@ textarea::placeholder { color: #3d4f6b !important; }
 }
 [data-testid="stMetricDelta"] { font-size: 0.75rem !important; }
 
-/* ── Expanders ── */
 [data-testid="stExpander"] {
     background: #141c2e !important;
     border: 1px solid rgba(255,255,255,0.07) !important;
@@ -1038,7 +937,6 @@ textarea::placeholder { color: #3d4f6b !important; }
     font-weight: 500 !important;
 }
 
-/* ── Progress bar ── */
 [data-testid="stProgressBar"] > div > div {
     background: linear-gradient(90deg, #4ECDC4, #44B8B0) !important;
 }
@@ -1047,7 +945,6 @@ textarea::placeholder { color: #3d4f6b !important; }
     border-radius: 99px !important;
 }
 
-/* ── Download button ── */
 [data-testid="stDownloadButton"] > button {
     background: rgba(78,205,196,0.1) !important;
     border: 1px solid rgba(78,205,196,0.3) !important;
@@ -1055,14 +952,12 @@ textarea::placeholder { color: #3d4f6b !important; }
     font-weight: 600 !important;
 }
 
-/* ── Selectbox ── */
 [data-testid="stSelectbox"] > div > div {
     background: #141c2e !important;
     border: 1px solid rgba(255,255,255,0.1) !important;
     color: #c9d1d9 !important;
 }
 
-/* ── Warning / info ── */
 .sf-warn {
     background: rgba(255,193,7,0.07);
     border: 1px solid rgba(255,193,7,0.25);
@@ -1082,11 +977,9 @@ textarea::placeholder { color: #3d4f6b !important; }
     margin-bottom: 14px;
 }
 
-/* ── Section header ── */
 .sf-sec { font-size: 0.95rem; font-weight: 700; color: #e6edf3; margin-bottom: 3px; }
 .sf-sec-sub { font-size: 0.73rem; color: #4a5568; margin-bottom: 12px; }
 
-/* ── Skill bars ── */
 .sf-skill-row {
     display: flex; align-items: center; gap: 8px;
     margin-bottom: 9px; font-size: 0.8rem;
@@ -1096,7 +989,6 @@ textarea::placeholder { color: #3d4f6b !important; }
 .sf-skill-fill  { height: 100%; border-radius: 99px; transition: width 1s ease; }
 .sf-skill-val   { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: #4a5568; min-width: 28px; text-align: right; }
 
-/* ── Status badges ── */
 .badge { font-size: 0.62rem; border-radius: 4px; padding: 2px 7px; font-weight: 600; letter-spacing: 0.03em; margin-left: 4px; }
 .bk { background: rgba(78,205,196,0.12); color: #4ECDC4; border: 1px solid rgba(78,205,196,0.3); }
 .bp { background: rgba(255,230,109,0.1); color: #FFE66D; border: 1px solid rgba(255,230,109,0.3); }
@@ -1104,7 +996,6 @@ textarea::placeholder { color: #3d4f6b !important; }
 .bh { background: rgba(255,107,107,0.1); color: #FF6B6B; border: 1px solid rgba(255,107,107,0.25); border-radius: 99px; font-size: 0.6rem; padding: 1px 7px; }
 .bg { background: rgba(255,230,109,0.08); color: #FFE66D; border: 1px solid rgba(255,230,109,0.25); border-radius: 99px; font-size: 0.6rem; padding: 1px 7px; }
 
-/* ── Module cards ── */
 .sf-mod {
     background: #1a2438;
     border: 1px solid rgba(255,255,255,0.06);
@@ -1120,20 +1011,16 @@ textarea::placeholder { color: #3d4f6b !important; }
 .sf-mod-meta  { font-size: 0.71rem; color: #4a5568; margin-top: 3px; }
 .sf-mod-reason { font-size: 0.75rem; color: #6b7a99; margin-top: 7px; padding-top: 7px; border-top: 1px solid rgba(255,255,255,0.05); font-style: italic; line-height: 1.5; }
 
-/* ── Profile rows ── */
 .sf-prow { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.82rem; }
 .sf-prow:last-child { border-bottom: none; }
 .sf-pk { color: #4a5568; }
 .sf-pv { font-weight: 600; color: #c9d1d9; text-align: right; }
 
-/* ── Transfer / obs items ── */
 .tf-item { background: rgba(167,139,250,0.05); border-left: 2px solid #a78bfa; border-radius: 6px; padding: 7px 11px; margin-bottom: 6px; font-size: 0.79rem; color: #8892a4; }
 .ob-item { background: rgba(255,107,107,0.04); border-left: 2px solid #ff6b6b; border-radius: 6px; padding: 7px 11px; margin-bottom: 6px; font-size: 0.79rem; color: #8892a4; }
 
-/* ── Audit log ── */
 .sf-ar { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04); border-radius: 6px; padding: 6px 10px; margin-bottom: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; color: #4a5568; display: flex; gap: 10px; flex-wrap: wrap; }
 
-/* ── Bottom status bar (screenshot has Plotly bar) ── */
 .sf-statusbar {
     position: fixed; bottom: 0; left: 0; right: 0;
     background: #0a0e1a;
@@ -1149,11 +1036,9 @@ textarea::placeholder { color: #3d4f6b !important; }
 .sf-statusbar .yellow { background: #FFE66D; }
 .sf-statusbar .version { font-family: 'JetBrains Mono', monospace; margin-left: auto; }
 
-/* ── Results fade in ── */
 @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .fade-in { animation: fadeUp 0.4s ease; }
 
-/* ── Remove default st padding on main content ── */
 .css-1d391kg, [data-testid="stAppViewContainer"] > section { padding-bottom: 48px !important; }
 </style>
 """
@@ -1206,22 +1091,33 @@ def main():
     render_nav()
     render_hero()
 
-    # ── Sample buttons ────────────────────────────────────────────────────────
+    # ── Sample buttons ─────────────────────────────────────────────────────────
+    # FIX: Write directly into session_state keys used by the text areas,
+    # then call st.rerun() so Streamlit picks them up before rendering.
     st.markdown('<div class="sf-samples"><div class="sf-samples-label">Try a sample:</div></div>',
                 unsafe_allow_html=True)
     s1, s2, s3, _ = st.columns([1,1,1,3])
-    if s1.button("👨‍💻 Junior SWE",      key="sp_jswe",  use_container_width=True):
-        st.session_state.update({"sample":"junior_swe","trigger_analyze":False})
-    if s2.button("🧪 Senior Data Scientist", key="sp_ds",  use_container_width=True):
-        st.session_state.update({"sample":"senior_ds","trigger_analyze":False})
-    if s3.button("💼 HR Manager",      key="sp_hr",    use_container_width=True):
-        st.session_state.update({"sample":"hr_manager","trigger_analyze":False})
 
-    active_sample = st.session_state.get("sample")
+    if s1.button("👨‍💻 Junior SWE", key="sp_jswe", use_container_width=True):
+        st.session_state["jd_paste"]  = SAMPLES["junior_swe"]["jd"]
+        st.session_state["res_paste"] = SAMPLES["junior_swe"]["resume"]
+        st.session_state.pop("result", None)
+        st.rerun()
 
-    # ── Three-column input layout — matches screenshot exactly ────────────────
+    if s2.button("🧪 Senior Data Scientist", key="sp_ds", use_container_width=True):
+        st.session_state["jd_paste"]  = SAMPLES["senior_ds"]["jd"]
+        st.session_state["res_paste"] = SAMPLES["senior_ds"]["resume"]
+        st.session_state.pop("result", None)
+        st.rerun()
+
+    if s3.button("💼 HR Manager", key="sp_hr", use_container_width=True):
+        st.session_state["jd_paste"]  = SAMPLES["hr_manager"]["jd"]
+        st.session_state["res_paste"] = SAMPLES["hr_manager"]["resume"]
+        st.session_state.pop("result", None)
+        st.rerun()
+
+    # ── Three-column input layout ──────────────────────────────────────────────
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-
     col_res, col_jd, col_btn = st.columns([5, 5, 3], gap="medium")
 
     # Resume card
@@ -1233,13 +1129,12 @@ def main():
           <div style="text-align:center;font-size:1rem;font-weight:700;color:#e6edf3;margin-bottom:14px">Resume</div>
         </div>
         """, unsafe_allow_html=True)
-        with st.container():
-            resume_file = st.file_uploader(
-                "Drop or browse",
-                type=["pdf","docx","jpg","jpeg","png","webp"],
-                key="res_file",
-                label_visibility="collapsed",
-            )
+        resume_file = st.file_uploader(
+            "Drop or browse",
+            type=["pdf","docx","jpg","jpeg","png","webp"],
+            key="res_file",
+            label_visibility="collapsed",
+        )
         st.markdown("""
         <div style="background:#141c2e;border:1px solid rgba(255,255,255,0.07);
                     border-radius:0 0 14px 14px;padding:0 20px 18px">
@@ -1256,22 +1151,21 @@ def main():
           <div style="text-align:center;font-size:1rem;font-weight:700;color:#e6edf3;margin-bottom:14px">Job Description</div>
         </div>
         """, unsafe_allow_html=True)
-        with st.container():
-            jd_file = st.file_uploader(
-                "Drop or browse",
-                type=["pdf","docx"],
-                key="jd_file",
-                label_visibility="collapsed",
-            )
+        jd_file = st.file_uploader(
+            "Drop or browse",
+            type=["pdf","docx"],
+            key="jd_file",
+            label_visibility="collapsed",
+        )
         st.markdown("""
         <div style="background:#141c2e;border:1px solid rgba(255,255,255,0.07);
                     padding:0 20px 4px">
           <p style="font-size:0.7rem;color:#3d4f6b;text-align:center;margin:4px 0 2px">PDF, DOCX or paste below</p>
         </div>
         """, unsafe_allow_html=True)
+        # FIX: No value= param — session_state["jd_paste"] drives the content
         jd_paste = st.text_area(
             "JD paste",
-            value=SAMPLES[active_sample]["jd"] if active_sample else "",
             height=90,
             placeholder="…or paste the JD text here",
             key="jd_paste",
@@ -1298,13 +1192,13 @@ def main():
         st.markdown("<div style='margin-top:12px'>", unsafe_allow_html=True)
         hpd = st.select_slider("Pace (hrs/day)", options=[1,2,4,8], value=2, key="hpd")
         st.markdown("</div>", unsafe_allow_html=True)
-        st.caption(f"`{MODEL_FAST.split('/')[-1]}`  ·  service_tier=auto")
+        st.caption(f"`{MODEL_FAST.split('/')[-1]}`")
 
-    # Resume paste (below cards, collapsed)
+    # Resume paste expander
     with st.expander("✏ Or paste resume text directly"):
+        # FIX: No value= param — session_state["res_paste"] drives the content
         res_paste = st.text_area(
             "Resume text",
-            value=SAMPLES[active_sample]["resume"] if active_sample else "",
             height=120,
             placeholder="Paste resume text here…",
             key="res_paste",
@@ -1317,26 +1211,26 @@ def main():
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    # ── Run analysis ──────────────────────────────────────────────────────────
+    # ── Run analysis ───────────────────────────────────────────────────────────
     if analyze_btn:
         res_text, res_img = "", None
         if resume_file:
             res_text, res_img = parse_uploaded_file(resume_file)
-        elif st.session_state.get("res_paste","").strip():
+        elif st.session_state.get("res_paste", "").strip():
             res_text = st.session_state["res_paste"].strip()
 
         jd_text = ""
         if jd_file:
             jd_text, _ = parse_uploaded_file(jd_file)
-        elif jd_paste.strip():
-            jd_text = jd_paste.strip()
+        elif st.session_state.get("jd_paste", "").strip():
+            jd_text = st.session_state["jd_paste"].strip()
 
         if not res_text and not res_img:
             st.error("Please upload or paste a resume."); return
         if not jd_text:
             st.error("Please upload or paste a job description."); return
 
-        with st.spinner("⚡ Calling Groq llama-4-scout (460 tok/s, service_tier=auto)…"):
+        with st.spinner("⚡ Calling Groq llama-4-scout…"):
             result = run_analysis(res_text, jd_text, res_img)
 
         if "error" in result:
@@ -1346,9 +1240,8 @@ def main():
 
         st.session_state["result"]     = result
         st.session_state["resume_txt"] = res_text
-        st.session_state.pop("sample", None)
 
-    # ── Render results ────────────────────────────────────────────────────────
+    # ── Render results ─────────────────────────────────────────────────────────
     res = st.session_state.get("result")
     if not res:
         render_status_bar()
@@ -1385,7 +1278,6 @@ def main():
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-    # Tabs
     tabs = st.tabs(["🗺 Skill Gap","📚 Roadmap + ROI","🔬 ATS Audit","💰 Salary + Rewrite","📋 API Log"])
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1404,7 +1296,7 @@ def main():
             k_cnt = sum(1 for g in gp if g["status"]=="Known")
             p_cnt = sum(1 for g in gp if g["status"]=="Partial")
             m_cnt = sum(1 for g in gp if g["status"]=="Missing")
-            st.markdown(f'<div class="sf-sec">All Skills</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sf-sec">All Skills</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="sf-sec-sub">{k_cnt} Known &nbsp;·&nbsp; {p_cnt} Partial &nbsp;·&nbsp; {m_cnt} Missing</div>',
                         unsafe_allow_html=True)
             bars_html = ""
@@ -1633,7 +1525,7 @@ def main():
     with tabs[4]:
         total_cost = sum(e.get("cost",0) for e in _audit_log)
         st.markdown('<div class="sf-sec">🔍 Groq API Audit Log</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="sf-sec-sub">{len(_audit_log)} calls · ${total_cost:.5f} total · service_tier=auto · key: .env only</div>',
+        st.markdown(f'<div class="sf-sec-sub">{len(_audit_log)} calls · ${total_cost:.5f} total · key: .env only</div>',
                     unsafe_allow_html=True)
 
         b1, b2 = st.columns(2)
