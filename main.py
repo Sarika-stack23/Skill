@@ -684,7 +684,7 @@ def build_pdf(c, jd, gp, path, im, ql=None, iv=None):
 
 
 # =============================================================================
-#  CHARTS  (kept clean, transparent bg, readable sizes)
+#  CHARTS
 # =============================================================================
 _BG     = "rgba(0,0,0,0)"
 _GRID   = "rgba(255,255,255,0.06)"
@@ -776,7 +776,7 @@ def roi_bar(roi_list):
 
 
 # =============================================================================
-#  CSS  v9 — DM Sans + DM Mono · readable, spacious, professional
+#  CSS
 # =============================================================================
 CSS = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -1203,7 +1203,7 @@ def _init_state():
 _RESET_KEYS = [
     "step","resume_text","resume_image","jd_text","result","completed",
     "rw_result","course_cache","force_fresh","search_query","search_results",
-    "res_paste","jd_paste",  # widget keys must be deleted so they re-init
+    "res_paste","jd_paste",
 ]
 
 def _full_reset():
@@ -1230,7 +1230,7 @@ def render_topbar():
     </div>""", unsafe_allow_html=True)
 
 # =============================================================================
-#  INPUT PAGE  (single screen — no wizard)
+#  INPUT PAGE
 # =============================================================================
 def render_input():
     st.markdown('<div class="sf-page">', unsafe_allow_html=True)
@@ -1243,7 +1243,7 @@ def render_input():
       <div class="sf-sub">Upload your resume and the target job description. SkillForge finds your exact gaps and builds a dependency-ordered roadmap — skipping what you already know.</div>
     </div>""", unsafe_allow_html=True)
 
-    # Sample scenarios — compact pills
+    # Sample scenarios
     st.markdown('<div class="sf-samples"><span class="sf-sample-lbl">Try a sample →</span></div>', unsafe_allow_html=True)
     pc1, pc2, pc3, _ = st.columns([1,1,1,2])
     for col, key, emoji in zip([pc1,pc2,pc3], SAMPLES, ["👨‍💻","🧠","👔"]):
@@ -1258,9 +1258,16 @@ def render_input():
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    # ── Two-panel input ───────────────────────────────────────────────────────
-    resume_ready = bool(st.session_state.get("resume_text","").strip() or st.session_state.get("resume_image"))
-    jd_ready     = bool(st.session_state.get("jd_text","").strip())
+    # ── FIX: derive ready flags from raw widget state OR synced state ─────────
+    resume_ready = bool(
+        st.session_state.get("resume_text","").strip() or
+        st.session_state.get("res_paste","").strip() or
+        st.session_state.get("resume_image")
+    )
+    jd_ready = bool(
+        st.session_state.get("jd_text","").strip() or
+        st.session_state.get("jd_paste","").strip()
+    )
 
     left, right = st.columns(2, gap="large")
 
@@ -1284,11 +1291,16 @@ def render_input():
         with r_tab_paste:
             if "res_paste" not in st.session_state:
                 st.session_state["res_paste"] = st.session_state.get("resume_text","")
+
+            # ── FIX: use on_change callback instead of post-widget mutation ──
+            def _sync_resume():
+                st.session_state["resume_text"] = st.session_state.get("res_paste","")
+
             st.text_area("Resume", height=220,
                          placeholder="Name, experience, skills, education, projects…",
-                         key="res_paste", label_visibility="collapsed")
-            st.session_state["resume_text"] = st.session_state.get("res_paste","")
-            wc = len(st.session_state["resume_text"].split())
+                         key="res_paste", label_visibility="collapsed",
+                         on_change=_sync_resume)
+            wc = len(st.session_state.get("res_paste","").split())
             if wc > 5:
                 st.markdown(f'<div class="sf-wc">{wc} words detected</div>', unsafe_allow_html=True)
 
@@ -1320,11 +1332,16 @@ def render_input():
         with j_tab_paste:
             if "jd_paste" not in st.session_state:
                 st.session_state["jd_paste"] = st.session_state.get("jd_text","")
+
+            # ── FIX: use on_change callback instead of post-widget mutation ──
+            def _sync_jd():
+                st.session_state["jd_text"] = st.session_state.get("jd_paste","")
+
             st.text_area("Job description", height=220,
                          placeholder="Role title, required & preferred skills, seniority level, responsibilities…",
-                         key="jd_paste", label_visibility="collapsed")
-            st.session_state["jd_text"] = st.session_state.get("jd_paste","")
-            wc_jd = len(st.session_state["jd_text"].split())
+                         key="jd_paste", label_visibility="collapsed",
+                         on_change=_sync_jd)
+            wc_jd = len(st.session_state.get("jd_paste","").split())
             if wc_jd > 5:
                 st.markdown(f'<div class="sf-wc">{wc_jd} words detected</div>', unsafe_allow_html=True)
 
@@ -1349,7 +1366,17 @@ def render_input():
         both_ready = resume_ready and jd_ready
         if both_ready:
             if st.button("Analyze skill gap ⚡", key="go_btn", use_container_width=True):
-                st.session_state["step"] = "analyzing"; st.rerun()
+                # Ensure synced state is captured before switching step
+                st.session_state["resume_text"] = (
+                    st.session_state.get("resume_text","") or
+                    st.session_state.get("res_paste","")
+                )
+                st.session_state["jd_text"] = (
+                    st.session_state.get("jd_text","") or
+                    st.session_state.get("jd_paste","")
+                )
+                st.session_state["step"] = "analyzing"
+                st.rerun()
         else:
             missing = []
             if not resume_ready: missing.append("resume")
@@ -1378,9 +1405,18 @@ def render_loading():
 
     with st.status("Analyzing your profile…", expanded=True) as status:
         st.write("📄 Parsing resume and job description")
+        # ── FIX: fall back to raw widget values if synced state is empty ─────
+        resume_text = (
+            st.session_state.get("resume_text","") or
+            st.session_state.get("res_paste","")
+        )
+        jd_text = (
+            st.session_state.get("jd_text","") or
+            st.session_state.get("jd_paste","")
+        )
         result = run_analysis_with_web(
-            st.session_state.get("resume_text",""),
-            st.session_state.get("jd_text",""),
+            resume_text,
+            jd_text,
             resume_image_b64=st.session_state.get("resume_image"),
             location=st.session_state.get("sal_location","India"),
         )
@@ -1410,7 +1446,7 @@ def render_loading():
     st.markdown("</div>", unsafe_allow_html=True)
 
 # =============================================================================
-#  RESULTS: SCORE BANNER  (always visible above tabs)
+#  RESULTS: SCORE BANNER
 # =============================================================================
 def render_banner(res):
     c   = res["candidate"]; jd = res["jd"]
@@ -1430,7 +1466,6 @@ def render_banner(res):
     ats   = ql.get("ats_score", 0)
     grade = ql.get("overall_grade","–")
 
-    # Determine circle color for fit
     fit_c = _RED if cur < 40 else _AMBER if cur < 65 else _GREEN
 
     cache_badge = '<span class="sf-cache-badge">⚡ Cached</span>' if res.get("_cache_hit") else ""
@@ -1463,7 +1498,6 @@ def render_banner(res):
       </div>
     </div>""", unsafe_allow_html=True)
 
-    # KPI strip
     k1,k2,k3,k4 = st.columns(4)
     k1.metric("Training hours",   f"{im['roadmap_hours']}h",   f"saves ~{im['hours_saved']}h vs generic")
     k2.metric("Modules",          im["modules_count"],          f"{im['critical_count']} on critical path")
@@ -1471,7 +1505,6 @@ def render_banner(res):
               f"at {st.session_state.get('hpd',2)}h/day")
     k4.metric("Interview ready",  f"{iv['score']}%",            iv["label"])
 
-    # Alerts
     sm = res.get("seniority",{})
     if sm.get("has_mismatch"):
         st.markdown(f'<div class="sf-warn">⚠ Seniority gap: you are <strong>{sm["candidate"]}</strong>, role requires <strong>{sm["required"]}</strong> — leadership modules injected into your roadmap.</div>', unsafe_allow_html=True)
@@ -1479,7 +1512,7 @@ def render_banner(res):
         st.markdown(f'<div style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.18);border-radius:7px;padding:10px 14px;font-size:0.82rem;color:var(--amber);margin-bottom:6px">⏱ {im["decayed_skills"]} skill(s) have decayed from inactivity — proficiency reduced in gap analysis</div>', unsafe_allow_html=True)
 
 # =============================================================================
-#  TAB 1 — OVERVIEW (gap + salary + transfers)
+#  TAB 1 — OVERVIEW
 # =============================================================================
 def render_tab_overview(res):
     gp     = res["gap_profile"]
@@ -1494,14 +1527,12 @@ def render_tab_overview(res):
     st.markdown('<div class="sf-sh">Skill gap</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sf-ss">{k_c} known · {p_c} partial · {m_c} missing — required skills shown first</div>', unsafe_allow_html=True)
 
-    # Filter row
     col_flt, col_radar = st.columns([1.4,1], gap="large")
 
     with col_flt:
         filt = st.selectbox("Filter", ["All","Missing","Partial","Known","Required only"],
                             key="gp_filter", label_visibility="collapsed")
 
-        # Skill grid — color-coded cards
         filtered = [g for g in gp if
                     filt=="All" or
                     (filt=="Missing"       and g["status"]=="Missing") or
@@ -1511,7 +1542,7 @@ def render_tab_overview(res):
 
         st.markdown('<div class="sf-skill-grid">', unsafe_allow_html=True)
         for g in filtered:
-            st.markdown("</div>", unsafe_allow_html=True)  # close grid, output card, reopen
+            st.markdown("</div>", unsafe_allow_html=True)
             st.markdown('<div class="sf-skill-grid">', unsafe_allow_html=True)
 
             s    = g["status"]
@@ -1543,7 +1574,6 @@ def render_tab_overview(res):
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # Obsolescence
         obs = res.get("obsolescence",[])
         if obs:
             st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
@@ -1554,14 +1584,12 @@ def render_tab_overview(res):
     with col_radar:
         st.plotly_chart(radar_chart(gp), use_container_width=True, config={"displayModeBar":False})
 
-        # Transfer advantages
         tf = res.get("transfers",[])
         if tf:
             st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin:14px 0 8px">Transfer advantages</div>', unsafe_allow_html=True)
             for t in tf[:5]:
                 st.markdown(f'<div class="sf-xfer"><span class="sf-xfer-pct">↗{t["transfer_pct"]}%</span><span>{t["label"]}</span></div>', unsafe_allow_html=True)
 
-        # Salary inline
         if sal and sal.get("median_lpa",0):
             curr = sal.get("currency","INR"); sym = "₹" if curr=="INR" else "$"; unit="L/yr" if curr=="INR" else "k/yr"
             st.markdown(f'<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin:16px 0 4px">Live salary — {res["jd"].get("role_title","")[:24]}</div>', unsafe_allow_html=True)
@@ -1593,7 +1621,6 @@ def render_tab_roadmap(res):
     mod_col, chart_col = st.columns([1.1,1], gap="large")
 
     with mod_col:
-        # Group into phases by level
         phases = [
             ("Foundation", [m for m in path if m["level"]=="Beginner"]),
             ("Build",       [m for m in path if m["level"]=="Intermediate"]),
@@ -1654,12 +1681,10 @@ def render_tab_roadmap(res):
         st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin-bottom:8px">ROI ranking</div>', unsafe_allow_html=True)
         st.plotly_chart(roi_bar(res.get("roi",[])), use_container_width=True, config={"displayModeBar":False})
 
-    # Full-width timeline
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin-bottom:10px">Training timeline</div>', unsafe_allow_html=True)
     st.plotly_chart(timeline_chart(path), use_container_width=True, config={"displayModeBar":False})
 
-    # Weekly plan
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin-bottom:10px">Weekly study plan</div>', unsafe_allow_html=True)
     rem_path = [m for m in path if m["id"] not in completed]
@@ -1670,7 +1695,6 @@ def render_tab_roadmap(res):
                 star = "★ " if mx.get("is_critical") else ""
                 st.markdown(f"- {star}**{mx['title']}** &nbsp;·&nbsp; `{mx['hrs_this_week']:.1f}h` of `{mx['total_hrs']}h`")
 
-    # Course loader
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     gap_skills_u = list({m["skill"] for m in path})
     loaded = len(st.session_state.get("course_cache",{}))
@@ -1686,7 +1710,7 @@ def render_tab_roadmap(res):
             st.rerun()
 
 # =============================================================================
-#  TAB 3 — RESEARCH (search + market + courses)
+#  TAB 3 — RESEARCH
 # =============================================================================
 def render_tab_research(res):
     gp  = res["gap_profile"]
@@ -1699,7 +1723,6 @@ def render_tab_research(res):
     st.markdown('<div class="sf-sh">Web research</div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-ss">Live search via DuckDuckGo — courses, salaries, market trends, anything</div>', unsafe_allow_html=True)
 
-    # Search bar
     q_col, btn_col = st.columns([5,1])
     with q_col:
         if "search_input" not in st.session_state:
@@ -1710,7 +1733,6 @@ def render_tab_research(res):
     with btn_col:
         do_search = st.button("Search →", key="go_search", use_container_width=True)
 
-    # Quick shortcut pills
     gap_skills_s = [g["skill"] for g in gp if g["status"]!="Known"][:4]
     role_name = jd.get("role_title","")
     shortcuts = [(s, f"{s} online course tutorial 2025") for s in gap_skills_s]
@@ -1725,7 +1747,6 @@ def render_tab_research(res):
                 st.session_state["search_results"] = ddg_search(q, max_results=8)
                 st.rerun()
 
-    # Execute search
     if do_search and st.session_state.get("search_query","").strip():
         with st.spinner("Searching…"):
             st.session_state["search_results"] = ddg_search(st.session_state["search_query"], max_results=8)
@@ -1749,7 +1770,6 @@ def render_tab_research(res):
 
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
 
-    # Salary + Market side by side
     sal_col, mkt_col = st.columns(2, gap="large")
     with sal_col:
         st.markdown('<div style="font-size:0.9rem;font-weight:600;color:var(--t1);margin-bottom:10px">Salary benchmark</div>', unsafe_allow_html=True)
@@ -1776,7 +1796,6 @@ def render_tab_research(res):
                     st.session_state["result"]["market_insights"] = search_job_market(role_name)
                 st.rerun()
 
-    # Skill demand signals
     if trends:
         st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
         st.markdown('<div style="font-size:0.9rem;font-weight:600;color:var(--t1);margin-bottom:10px">Skill demand signals</div>', unsafe_allow_html=True)
@@ -1791,7 +1810,6 @@ def render_tab_research(res):
                 st.session_state["result"]["skill_trends"] = search_skill_trends(gs)
             st.rerun()
 
-    # Course finder
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:0.9rem;font-weight:600;color:var(--t1);margin-bottom:8px">Course finder</div>', unsafe_allow_html=True)
     gap_skills_f = [g["skill"] for g in gp if g["status"]!="Known"]
@@ -1826,7 +1844,6 @@ def render_tab_ats_export(res):
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    # ── ATS ──────────────────────────────────────────────────────────────────
     st.markdown('<div class="sf-sh">ATS audit</div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-ss">Resume quality scores · improvement tips · ATS keyword gaps · interview talking points</div>', unsafe_allow_html=True)
 
@@ -1872,7 +1889,6 @@ def render_tab_ats_export(res):
         c2.metric("Seniority gap", f"{sm.get('gap_levels',0)} lvl")
         c3.metric("Career est.", f"~{cgm}mo" if cgm else "–")
 
-    # Resume rewrite
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin-bottom:4px">AI resume rewrite</div>', unsafe_allow_html=True)
     st.markdown('<div style="font-family:var(--mono);font-size:0.68rem;color:var(--t3);margin-bottom:10px">ATS-optimized version with missing keywords added naturally</div>', unsafe_allow_html=True)
@@ -1898,7 +1914,6 @@ def render_tab_ats_export(res):
             st.download_button("⬇ Download rewritten resume", data=rw,
                                file_name="skillforge_rewritten.txt", mime="text/plain")
 
-    # ── EXPORT ───────────────────────────────────────────────────────────────
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-sh">Export</div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-ss">Download your personalized roadmap as PDF · JSON · CSV</div>', unsafe_allow_html=True)
@@ -1952,7 +1967,6 @@ def render_tab_ats_export(res):
                            mime="text/csv", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # API log
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     total_cost = sum(e.get("cost",0) for e in _audit_log)
     with st.expander(f"API log — {len(_audit_log)} calls · ${total_cost:.5f}"):
@@ -1988,7 +2002,7 @@ def render_sidebar(res):
         st.markdown('</div>', unsafe_allow_html=True)
 
 # =============================================================================
-#  RESULTS PAGE  (4 tabs)
+#  RESULTS PAGE
 # =============================================================================
 def render_results():
     res = st.session_state.get("result")
@@ -1998,7 +2012,6 @@ def render_results():
 
     st.markdown('<div class="sf-page">', unsafe_allow_html=True)
 
-    # Reset button
     _, rc = st.columns([12,1])
     with rc:
         st.markdown('<div class="sf-ghost">', unsafe_allow_html=True)
@@ -2006,10 +2019,8 @@ def render_results():
             _full_reset()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Score banner (always visible)
     render_banner(res)
 
-    # Anchor targets + 4 tabs
     st.markdown('<div id="overview"></div><div id="roadmap"></div><div id="research"></div><div id="ats"></div>', unsafe_allow_html=True)
 
     t1, t2, t3, t4 = st.tabs(["📊 Overview & Gap", "🗺️ Roadmap", "🌐 Research", "✅ ATS & Export"])
