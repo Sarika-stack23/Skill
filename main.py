@@ -1,9 +1,7 @@
 # =============================================================================
-#  main.py — SkillForge v5  |  Streamlit Edition
-#  UI:  Matches screenshot exactly — dark theme, 3-column card layout
-#  API: Groq key lives in .env ONLY — never exposed to frontend
+#  main.py — SkillForge v6  |  Streamlit Edition
+#  REDESIGN: 1-click samples · always-visible inputs · web search · course links
 #  Run: streamlit run main.py
-#  FIX: Sample buttons now correctly populate text areas via session_state
 # =============================================================================
 
 import os, sys, json, io, re, time, hashlib, shelve, threading, argparse, base64
@@ -15,15 +13,13 @@ load_dotenv()
 
 import streamlit as st
 
-# ── Page config (must be first Streamlit call) ────────────────────────────────
 st.set_page_config(
-    page_title="SkillForge — Skill Gap · Learning Pathways",
+    page_title="SkillForge — AI Onboarding Engine",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
-# ── Backend imports ───────────────────────────────────────────────────────────
 import plotly.graph_objects as go
 import networkx as nx
 import pdfplumber
@@ -39,10 +35,17 @@ try:
 except Exception:
     REPORTLAB = False
 
-# ── Semantic matching (background load, optional) ─────────────────────────────
-SEMANTIC = False
-_ST      = None
-_CEMBS   = None
+# ── Web search (DuckDuckGo — free, no API key) ────────────────────────────────
+def ddg_search(query: str, max_results: int = 5) -> List[dict]:
+    try:
+        from duckduckgo_search import DDGS
+        with DDGS() as ddgs:
+            return list(ddgs.text(query, max_results=max_results))
+    except Exception:
+        return []
+
+# ── Semantic matching ─────────────────────────────────────────────────────────
+SEMANTIC, _ST, _CEMBS = False, None, None
 
 def _load_semantic_bg():
     global SEMANTIC, _ST, _CEMBS
@@ -54,19 +57,14 @@ def _load_semantic_bg():
     except Exception:
         pass
 
-# ── Groq client — key from .env ONLY, never shown in UI ──────────────────────
+# ── Groq ──────────────────────────────────────────────────────────────────────
 _GROQ_KEY = os.getenv("GROQ_API_KEY", "")
 if not _GROQ_KEY:
-    st.error(
-        "**GROQ_API_KEY missing** — create a `.env` file with:\n\n"
-        "```\nGROQ_API_KEY=gsk_your_key_here\n```\n\n"
-        "Get a free key at [console.groq.com](https://console.groq.com)"
-    )
+    st.error("**GROQ_API_KEY missing** — add it to `.env`\n\nGet a free key at [console.groq.com](https://console.groq.com)")
     st.stop()
 
 GROQ_CLIENT  = Groq(api_key=_GROQ_KEY)
 MODEL_FAST   = "meta-llama/llama-4-scout-17b-16e-instruct"
-MODEL_MICRO  = "llama-3.1-8b-instant"
 CURRENT_YEAR = datetime.now().year
 
 # =============================================================================
@@ -160,17 +158,17 @@ TRANSFER_MAP: Dict[str, Dict[str, int]] = {
 SENIORITY_MAP = {"Junior":0,"Mid":1,"Senior":2,"Lead":3}
 
 SAMPLES = {
-    "junior_swe":{
+    "junior_swe": {
         "label":"👨‍💻 Junior SWE",
         "resume":"John Smith\nJunior Software Developer | 1 year experience\nSkills: Python (basic, 4/10), HTML/CSS, some JavaScript\nEducation: B.Tech Computer Science 2023\nProjects: Built a todo app using Flask. Familiar with Git basics.\nNo professional cloud or DevOps experience.",
         "jd":"Software Engineer Full Stack - Mid Level\nRequired: Python, React, FastAPI, Docker, SQL, REST APIs, AWS\nPreferred: Kubernetes, CI/CD\nSeniority: Mid | Domain: Tech",
     },
-    "senior_ds":{
-        "label":"🧪 Senior Data Scientist",
+    "senior_ds": {
+        "label":"🧪 Senior DS",
         "resume":"Priya Patel\nSenior Data Scientist | 7 years experience\nSkills: Python (expert, 9/10), Machine Learning (expert), Deep Learning (PyTorch, 8/10), SQL (advanced, 8/10), AWS SageMaker (7/10)\nLast used NLP: 2022. Last used MLOps: 2021.\nLed team of 5. Published 3 ML papers.",
         "jd":"Lead Data Scientist - AI Products\nRequired: Python, Machine Learning, Deep Learning, NLP, MLOps, SQL, AWS\nPreferred: GCP, Kubernetes, Leadership\nSeniority: Lead | Domain: Tech",
     },
-    "hr_manager":{
+    "hr_manager": {
         "label":"💼 HR Manager",
         "resume":"Amara Johnson\nHR Coordinator | 3 years experience\nSkills: Human Resources (intermediate, 6/10), Recruitment (good, 7/10), Microsoft Office\nSome performance review experience. No formal L&D training.",
         "jd":"HR Manager - People and Culture\nRequired: Human Resources, Recruitment, Performance Management, Employee Relations\nPreferred: L&D Strategy, Communication, Leadership\nSeniority: Senior | Domain: Non-Tech",
@@ -191,35 +189,28 @@ def _build_graph() -> nx.DiGraph:
 SKILL_GRAPH = _build_graph()
 
 # =============================================================================
-#  FILE PARSERS
+#  FILE PARSER
 # =============================================================================
 def parse_uploaded_file(f) -> Tuple[str, Optional[str]]:
-    """Streamlit UploadedFile → (text, image_b64|None)"""
-    if f is None:
-        return "", None
-    name = f.name.lower()
-    raw  = f.read()
+    if f is None: return "", None
+    name = f.name.lower(); raw = f.read()
     if name.endswith(".pdf"):
         try:
             with pdfplumber.open(io.BytesIO(raw)) as pdf:
                 return "\n".join(p.extract_text() or "" for p in pdf.pages), None
-        except Exception as e:
-            return f"[PDF error: {e}]", None
+        except Exception as e: return f"[PDF error: {e}]", None
     if name.endswith(".docx"):
         try:
             doc = Document(io.BytesIO(raw))
             return "\n".join(p.text for p in doc.paragraphs), None
-        except Exception as e:
-            return f"[DOCX error: {e}]", None
+        except Exception as e: return f"[DOCX error: {e}]", None
     if any(name.endswith(x) for x in [".jpg",".jpeg",".png",".webp"]):
-        media = ("image/jpeg" if name.endswith((".jpg",".jpeg"))
-                 else "image/png" if name.endswith(".png") else "image/webp")
-        b64 = base64.b64encode(raw).decode()
-        return "", f"data:{media};base64,{b64}"
+        media = ("image/jpeg" if name.endswith((".jpg",".jpeg")) else "image/png" if name.endswith(".png") else "image/webp")
+        return "", f"data:{media};base64,{base64.b64encode(raw).decode()}"
     return raw.decode("utf-8", errors="ignore"), None
 
 # =============================================================================
-#  GROQ — server-side only
+#  GROQ CALLS
 # =============================================================================
 _audit_log: List[dict] = []
 
@@ -233,43 +224,31 @@ def _groq_call(prompt: str, system: str, model: str = MODEL_FAST,
     try:
         r = GROQ_CLIENT.chat.completions.create(
             model=model, messages=messages, temperature=0.1,
-            max_tokens=max_tokens,
-            response_format={"type":"json_object"},
+            max_tokens=max_tokens, response_format={"type":"json_object"},
         )
-        usage   = r.usage
-        in_tok  = usage.prompt_tokens     if usage else 0
+        usage = r.usage
+        in_tok  = usage.prompt_tokens if usage else 0
         out_tok = usage.completion_tokens if usage else 0
-        cached_d= getattr(usage,"prompt_tokens_details",None)
-        cached_c= getattr(cached_d,"cached_tokens",0) if cached_d else 0
-        cost    = round((in_tok*0.00000011)+(out_tok*0.00000034),6)
-        _audit_log.append({
-            "ts":datetime.now().strftime("%H:%M:%S"),
-            "model":model.split("/")[-1][:22],
-            "in":in_tok,"out":out_tok,"cached":cached_c,
-            "ms":round((time.time()-t0)*1000),
-            "cost":cost,"status":"ok",
-            "tier":"default",
-        })
+        cached_d = getattr(usage,"prompt_tokens_details",None)
+        cached_c = getattr(cached_d,"cached_tokens",0) if cached_d else 0
+        cost = round((in_tok*0.00000011)+(out_tok*0.00000034),6)
+        _audit_log.append({"ts":datetime.now().strftime("%H:%M:%S"),"model":model.split("/")[-1][:22],
+                            "in":in_tok,"out":out_tok,"cached":cached_c,
+                            "ms":round((time.time()-t0)*1000),"cost":cost,"status":"ok"})
         return json.loads(r.choices[0].message.content or "{}")
     except json.JSONDecodeError as e:
-        _audit_log.append({"ts":datetime.now().strftime("%H:%M:%S"),
-                            "model":model.split("/")[-1][:22],
-                            "status":f"json_err:{e}","in":0,"out":0,"cached":0,"ms":0,"cost":0,"tier":"?"})
+        _audit_log.append({"ts":datetime.now().strftime("%H:%M:%S"),"model":model.split("/")[-1][:22],
+                            "status":f"json_err","in":0,"out":0,"cached":0,"ms":0,"cost":0})
         return {"error":"json_parse_failed"}
     except Exception as e:
-        err = str(e)
-        wait_s = 0
-        if "429" in err or "rate_limit_exceeded" in err:
+        err = str(e); wait_s = 0
+        if "429" in err or "rate_limit" in err:
             m = re.search(r"try again in (\d+)m([\d.]+)s", err)
             if m: wait_s = int(m.group(1))*60+float(m.group(2))
-            _audit_log.append({"ts":datetime.now().strftime("%H:%M:%S"),
-                                "model":model.split("/")[-1][:22],
-                                "status":f"429 wait:{int(wait_s)}s","in":0,"out":0,"cached":0,"ms":0,"cost":0,"tier":"?"})
             return {"error":"rate_limited","wait_seconds":int(wait_s),
                     "message":f"Rate limited. Retry in {int(wait_s//60)}m{int(wait_s%60)}s."}
-        _audit_log.append({"ts":datetime.now().strftime("%H:%M:%S"),
-                            "model":model.split("/")[-1][:22],
-                            "status":f"err:{err[:40]}","in":0,"out":0,"cached":0,"ms":0,"cost":0,"tier":"?"})
+        _audit_log.append({"ts":datetime.now().strftime("%H:%M:%S"),"model":model.split("/")[-1][:22],
+                            "status":f"err:{err[:40]}","in":0,"out":0,"cached":0,"ms":0,"cost":0})
         return {"error":err}
 
 _MEGA_SYS = """You are a world-class senior tech recruiter, ATS specialist, and L&D expert.
@@ -282,7 +261,6 @@ def mega_call(resume_text: str, jd_text: str,
     reasoning_block = ""
     if modules_hint:
         reasoning_block = '\n  "reasoning": {"<module_id>": "<2-sentence why this candidate needs this module>"},'
-
     prompt = f"""Analyze this resume and job description.
 
 RESUME ({'IMAGE' if resume_image_b64 else 'TEXT'}):
@@ -326,18 +304,9 @@ Return EXACTLY this JSON:
     return _groq_call(prompt=prompt, system=_MEGA_SYS, model=MODEL_FAST,
                       max_tokens=2800, image_b64=resume_image_b64)
 
-def fetch_live_salary(role: str, location: str = "India") -> dict:
-    r = _groq_call(
-        f'Search current salary for "{role}" in {location} as of 2026. '
-        f'Return JSON: {{"min_lpa":<n>,"max_lpa":<n>,"median_lpa":<n>,"currency":"INR","source":"<site>","note":"<caveats>"}}',
-        system="Salary research assistant. Return JSON only.",
-        model=MODEL_FAST, max_tokens=300,
-    )
-    return r if "error" not in r else {"min_lpa":0,"max_lpa":0,"median_lpa":0,"note":"unavailable"}
-
 def rewrite_resume(resume_text: str, jd: dict, missing_kw: List[str]) -> str:
     r = _groq_call(
-        f'Rewrite this resume for the target role. Naturally add these missing keywords: {missing_kw[:8]}. '
+        f'Rewrite this resume for the target role. Naturally add missing keywords: {missing_kw[:8]}. '
         f'Keep all facts true. Return JSON: {{"rewritten_resume":"<text>"}}\n\n'
         f'Resume:\n{resume_text[:1500]}\n\nTarget: {jd.get("role_title","--")}  Required: {jd.get("required_skills",[])}',
         system="Expert resume writer. Return JSON only.", model=MODEL_FAST, max_tokens=1500,
@@ -345,137 +314,197 @@ def rewrite_resume(resume_text: str, jd: dict, missing_kw: List[str]) -> str:
     return r.get("rewritten_resume","Could not rewrite resume.")
 
 # =============================================================================
-#  CACHE
+#  WEB SEARCH FEATURES (DuckDuckGo + Groq)
 # =============================================================================
-_CACHE_PATH = "/tmp/skillforge_v5_st"
-def _ckey(r: str, j: str) -> str: return hashlib.md5((r+"||"+j).encode()).hexdigest()
-def cache_get(r: str, j: str) -> Optional[dict]:
-    try:
-        with shelve.open(_CACHE_PATH) as db: return db.get(_ckey(r,j))
-    except Exception: return None
-def cache_set(r: str, j: str, v: dict):
-    try:
-        with shelve.open(_CACHE_PATH) as db: db[_ckey(r,j)] = v
-    except Exception: pass
+def search_real_salary(role: str, location: str) -> dict:
+    """Live salary lookup: DDG search → Groq parse."""
+    results = ddg_search(f"{role} salary {location} 2025 average annual", max_results=6)
+    if not results:
+        return {"min_lpa":0,"max_lpa":0,"median_lpa":0,"note":"No web results found","source":"—"}
+    snippets = "\n".join([f"- {r.get('title','')}: {r.get('body','')[:200]}" for r in results[:5]])
+    r = _groq_call(
+        f'Extract salary data for "{role}" in {location} from these search snippets.\n\n{snippets}\n\n'
+        f'Return JSON: {{"min_lpa":<number>,"max_lpa":<number>,"median_lpa":<number>,'
+        f'"currency":"INR or USD","source":"<website name>","note":"<key caveat>"}}',
+        system="Extract structured salary info from web snippets. Return JSON only.",
+        model=MODEL_FAST, max_tokens=400,
+    )
+    return r if "error" not in r else {"min_lpa":0,"max_lpa":0,"median_lpa":0,"note":"Parse failed","source":"—"}
+
+def search_course_links(skill: str) -> List[dict]:
+    """Find real course URLs for a skill via DDG."""
+    results = ddg_search(
+        f'"{skill}" online course 2025 coursera OR udemy OR youtube', max_results=6
+    )
+    courses = []
+    for r in results:
+        url  = r.get('href','')
+        body = r.get('body','')
+        if not url: continue
+        if 'coursera.org' in url:   plat, icon = 'Coursera', '🎓'
+        elif 'udemy.com' in url:    plat, icon = 'Udemy',    '🎯'
+        elif 'youtube.com' in url:  plat, icon = 'YouTube',  '▶️'
+        elif 'edx.org' in url:      plat, icon = 'edX',      '📘'
+        elif 'linkedin.com' in url: plat, icon = 'LinkedIn',  '💼'
+        else:                        continue
+        courses.append({"title":r.get('title','')[:65],"url":url,
+                         "platform":plat,"icon":icon,"snippet":body[:100]})
+    return courses[:4]
+
+def search_skill_trends(skills: List[str]) -> Dict[str, str]:
+    """Quick web-based demand signal per skill."""
+    if not skills: return {}
+    query = " ".join(skills[:6])
+    results = ddg_search(f"most in-demand skills 2025 2026 hiring {query}", max_results=4)
+    text = " ".join([r.get('body','') for r in results]).lower()
+    out = {}
+    for skill in skills:
+        sl = skill.lower()
+        count = text.count(sl)
+        out[skill] = ("🔥 Hot" if count >= 3 else "📈 Growing" if count >= 1 else "✓ Stable")
+    return out
+
+def search_job_market(role: str) -> List[str]:
+    """Get 3 quick job market insights for the target role."""
+    results = ddg_search(f'"{role}" job market hiring trends 2025 2026', max_results=4)
+    if not results: return []
+    snippets = "\n".join([r.get('body','')[:300] for r in results[:4]])
+    r = _groq_call(
+        f'Based on these search results about "{role}" job market, give 3 short, specific insights.\n\n'
+        f'{snippets}\n\nReturn JSON: {{"insights":["<insight1>","<insight2>","<insight3>"]}}',
+        system="Job market analyst. Return JSON only.", model=MODEL_FAST, max_tokens=300,
+    )
+    return r.get("insights",[]) if "error" not in r else []
 
 # =============================================================================
-#  ANALYSIS ENGINE — pure Python, <50ms, zero API calls
+#  CACHE
+# =============================================================================
+_CACHE_PATH = "/tmp/skillforge_v6_st"
+def _ckey(r: str, j: str) -> str: return hashlib.md5((r+"||"+j).encode()).hexdigest()
+def cache_get(r,j):
+    try:
+        with shelve.open(_CACHE_PATH) as db: return db.get(_ckey(r,j))
+    except: return None
+def cache_set(r,j,v):
+    try:
+        with shelve.open(_CACHE_PATH) as db: db[_ckey(r,j)] = v
+    except: pass
+
+# =============================================================================
+#  ANALYSIS ENGINE
 # =============================================================================
 def _match_skill(skill: str) -> int:
     sl = skill.lower().replace(".js","").replace(".ts","").replace("(","").replace(")","").strip()
-    for i, cs in enumerate(CATALOG_SKILLS):
-        if sl == cs or sl in cs or cs in sl: return i
+    for i,cs in enumerate(CATALOG_SKILLS):
+        if sl==cs or sl in cs or cs in sl: return i
     if SEMANTIC and _ST and _CEMBS is not None:
         try:
             from sklearn.metrics.pairwise import cosine_similarity
             import numpy as np
-            sims = cosine_similarity(_ST.encode([sl]), _CEMBS)[0]
+            sims = cosine_similarity(_ST.encode([sl]),_CEMBS)[0]
             best = int(np.argmax(sims))
-            if sims[best] >= 0.52: return best
-        except Exception: pass
-    tokens = set(sl.split()); best_s, best_i = 0.0, -1
-    for i, cs in enumerate(CATALOG_SKILLS):
-        ov = len(tokens & set(cs.split())) / max(len(tokens), 1)
-        if ov > best_s: best_s, best_i = ov, i
-    return best_i if best_s >= 0.4 else -1
+            if sims[best]>=0.52: return best
+        except: pass
+    tokens=set(sl.split()); best_s,best_i=0.0,-1
+    for i,cs in enumerate(CATALOG_SKILLS):
+        ov=len(tokens&set(cs.split()))/max(len(tokens),1)
+        if ov>best_s: best_s,best_i=ov,i
+    return best_i if best_s>=0.4 else -1
 
-def skill_decay(p: int, yr: int) -> Tuple[int, bool]:
-    if yr <= 0 or yr >= CURRENT_YEAR - 1: return p, False
-    yrs = CURRENT_YEAR - yr
-    if yrs <= 2: return p, False
-    a = round(p * max(0.5, 1 - yrs/5))
-    return a, a < p
+def skill_decay(p,yr):
+    if yr<=0 or yr>=CURRENT_YEAR-1: return p,False
+    yrs=CURRENT_YEAR-yr
+    if yrs<=2: return p,False
+    a=round(p*max(0.5,1-yrs/5)); return a,a<p
 
-def analyze_gap(candidate: dict, jd: dict) -> List[dict]:
-    rs = {s["skill"].lower(): s for s in candidate.get("skills",[])}
-    all_s = [(s,True) for s in jd.get("required_skills",[])] + [(s,False) for s in jd.get("preferred_skills",[])]
-    out = []
-    for skill, req in all_s:
-        sl = skill.lower().replace(".js","").replace(".ts","").strip()
-        status, prof, ctx, dec, orig = "Missing", 0, "", False, 0
-        src = rs.get(sl) or next((v for k,v in rs.items() if sl in k or k in sl), None)
+def analyze_gap(candidate,jd):
+    rs={s["skill"].lower():s for s in candidate.get("skills",[])}
+    all_s=[(s,True) for s in jd.get("required_skills",[])]+[(s,False) for s in jd.get("preferred_skills",[])]
+    out=[]
+    for skill,req in all_s:
+        sl=skill.lower().replace(".js","").replace(".ts","").strip()
+        status,prof,ctx,dec,orig="Missing",0,"",False,0
+        src=rs.get(sl) or next((v for k,v in rs.items() if sl in k or k in sl),None)
         if src:
-            raw_p = src.get("proficiency",0); prof,dec = skill_decay(raw_p,src.get("year_last_used",0))
-            orig, ctx = raw_p, src.get("context",""); status = "Known" if prof >= 7 else "Partial"
-        idx = _match_skill(skill)
-        demand = MARKET_DEMAND.get(sl, MARKET_DEMAND.get(skill.lower(),1))
-        obs = OBSOLESCENCE_RISK.get(sl)
+            raw_p=src.get("proficiency",0); prof,dec=skill_decay(raw_p,src.get("year_last_used",0))
+            orig,ctx=raw_p,src.get("context",""); status="Known" if prof>=7 else "Partial"
+        idx=_match_skill(skill)
+        demand=MARKET_DEMAND.get(sl,MARKET_DEMAND.get(skill.lower(),1))
+        obs=OBSOLESCENCE_RISK.get(sl)
         out.append({"skill":skill,"status":status,"proficiency":prof,"original_prof":orig,
                     "decayed":dec,"is_required":req,"context":ctx,
                     "catalog_course":CATALOG[idx] if idx>=0 else None,
                     "demand":demand,"obsolescence_risk":obs})
     return out
 
-def seniority_check(c: dict, jd: dict) -> dict:
-    cs, rs = c.get("seniority","Mid"), jd.get("seniority_required","Mid")
-    gap = SENIORITY_MAP.get(rs,1) - SENIORITY_MAP.get(cs,1)
+def seniority_check(c,jd):
+    cs,rs=c.get("seniority","Mid"),jd.get("seniority_required","Mid")
+    gap=SENIORITY_MAP.get(rs,1)-SENIORITY_MAP.get(cs,1)
     return {"has_mismatch":gap>0,"gap_levels":gap,"candidate":cs,"required":rs,
             "add_leadership":gap>=1,"add_strategic":gap>=2}
 
-def build_path(gp: List[dict], c: dict, jd: Optional[dict]=None) -> List[dict]:
-    needed: set = set(); id2gap: Dict[str,dict] = {}
+def build_path(gp,c,jd=None):
+    needed=set(); id2gap={}
     for g in gp:
-        if g["status"] == "Known": continue
-        co = g.get("catalog_course")
+        if g["status"]=="Known": continue
+        co=g.get("catalog_course")
         if not co: continue
-        needed.add(co["id"]); id2gap[co["id"]] = g
+        needed.add(co["id"]); id2gap[co["id"]]=g
         try:
-            for anc in nx.ancestors(SKILL_GRAPH, co["id"]):
-                ad = CATALOG_BY_ID.get(anc)
+            for anc in nx.ancestors(SKILL_GRAPH,co["id"]):
+                ad=CATALOG_BY_ID.get(anc)
                 if ad and not any(x["status"]=="Known" and x["skill"].lower() in ad["skill"].lower() for x in gp):
                     needed.add(anc)
-        except Exception: pass
+        except: pass
     if jd:
-        sm = seniority_check(c, jd)
+        sm=seniority_check(c,jd)
         if sm["add_leadership"]: needed.update(["LD01","LD02"])
         if sm["add_strategic"]:  needed.add("LD03")
-    sub = SKILL_GRAPH.subgraph(needed)
-    try: ordered = list(nx.topological_sort(sub))
-    except Exception: ordered = list(needed)
-    crit = set()
+    sub=SKILL_GRAPH.subgraph(needed)
+    try: ordered=list(nx.topological_sort(sub))
+    except: ordered=list(needed)
+    crit=set()
     try:
-        if sub.nodes: crit = set(nx.dag_longest_path(sub))
-    except Exception: pass
-    path, seen = [], set()
+        if sub.nodes: crit=set(nx.dag_longest_path(sub))
+    except: pass
+    path,seen=[],set()
     for cid in ordered:
         if cid in seen: continue
-        seen.add(cid); co = CATALOG_BY_ID.get(cid)
+        seen.add(cid); co=CATALOG_BY_ID.get(cid)
         if not co: continue
-        g = id2gap.get(cid, {})
+        g=id2gap.get(cid,{})
         path.append({**co,"gap_skill":g.get("skill",co["skill"]),"gap_status":g.get("status","Prereq"),
-                     "priority":(0 if g.get("is_required") else 1, g.get("proficiency",0)),
+                     "priority":(0 if g.get("is_required") else 1,g.get("proficiency",0)),
                      "reasoning":"","is_critical":cid in crit,"demand":g.get("demand",1),
                      "is_required":g.get("is_required",False)})
-    path.sort(key=lambda x: x["priority"])
-    return path
+    path.sort(key=lambda x:x["priority"]); return path
 
-def calc_impact(gp: List[dict], path: List[dict]) -> dict:
-    tot = len(gp); known = sum(1 for g in gp if g["status"]=="Known")
-    covered = len({m["gap_skill"] for m in path}); rhrs = sum(m["duration_hrs"] for m in path)
-    cur  = min(100, round(known/max(tot,1)*100))
-    proj = min(100, round((known+covered)/max(tot,1)*100))
+def calc_impact(gp,path):
+    tot=len(gp); known=sum(1 for g in gp if g["status"]=="Known")
+    covered=len({m["gap_skill"] for m in path}); rhrs=sum(m["duration_hrs"] for m in path)
+    cur=min(100,round(known/max(tot,1)*100)); proj=min(100,round((known+covered)/max(tot,1)*100))
     return {"total_skills":tot,"known_skills":known,"gaps_addressed":covered,
             "roadmap_hours":rhrs,"hours_saved":max(0,60-rhrs),
             "current_fit":cur,"projected_fit":proj,"fit_delta":proj-cur,
             "modules_count":len(path),"critical_count":sum(1 for m in path if m.get("is_critical")),
             "decayed_skills":sum(1 for g in gp if g.get("decayed"))}
 
-def interview_readiness(gp: List[dict], c: dict) -> dict:
+def interview_readiness(gp,c):
     rk=[g for g in gp if g["status"]=="Known"   and g["is_required"]]
     rp=[g for g in gp if g["status"]=="Partial" and g["is_required"]]
     rm=[g for g in gp if g["status"]=="Missing" and g["is_required"]]
     tot=max(len(rk)+len(rp)+len(rm),1)
     sc=max(0,min(100,round((len(rk)+len(rp)*0.4)/tot*100)
                     +{"Junior":5,"Mid":0,"Senior":-5,"Lead":-10}.get(c.get("seniority","Mid"),0)))
-    if sc>=75:   v=("Strong",   "#4ECDC4","Ready for most rounds")
-    elif sc>=50: v=("Moderate", "#FFE66D","Pass screening; prep gaps")
-    elif sc>=30: v=("Weak",     "#FFA726","Gap work before applying")
-    else:        v=("Not Ready","#FF6B6B","Significant prep needed")
+    if sc>=75:   v=("Strong","#00d4c8","Ready for most rounds")
+    elif sc>=50: v=("Moderate","#f5c842","Pass screening; prep gaps")
+    elif sc>=30: v=("Weak","#f5a623","Gap work before applying")
+    else:        v=("Not Ready","#f55142","Significant prep needed")
     return {"score":sc,"label":v[0],"color":v[1],"advice":v[2],
             "req_known":len(rk),"req_partial":len(rp),"req_missing":len(rm)}
 
-def weekly_plan(path: List[dict], hpd: float=2.0) -> List[dict]:
-    cap,weeks,cur,hrs,wn = hpd*5,[],[],0.0,1
+def weekly_plan(path,hpd=2.0):
+    cap,weeks,cur,hrs,wn=hpd*5,[],[],0.0,1
     for m in path:
         rem=float(m["duration_hrs"])
         while rem>0:
@@ -492,7 +521,7 @@ def weekly_plan(path: List[dict], hpd: float=2.0) -> List[dict]:
     if cur: weeks.append({"week":wn,"modules":cur,"total_hrs":hrs})
     return weeks
 
-def transfer_map(c: dict, gp: List[dict]) -> List[dict]:
+def transfer_map(c,gp):
     known={g["skill"].lower() for g in c.get("skills",[]) if g.get("proficiency",0)>=6}
     out=[]
     for g in gp:
@@ -504,7 +533,7 @@ def transfer_map(c: dict, gp: List[dict]) -> List[dict]:
                                   "label":f"Your {k.title()} → {pct}% head start on {g['skill']}"})
     return sorted(out,key=lambda x:x["transfer_pct"],reverse=True)
 
-def roi_rank(gp: List[dict], path: List[dict]) -> List[dict]:
+def roi_rank(gp,path):
     out=[]
     for m in path:
         g=next((x for x in gp if x["skill"]==m.get("gap_skill")),{})
@@ -513,882 +542,716 @@ def roi_rank(gp: List[dict], path: List[dict]) -> List[dict]:
                     "hrs":m["duration_hrs"],"is_required":g.get("is_required",False)})
     return sorted(out,key=lambda x:x["roi"],reverse=True)
 
-def weeks_ready(hrs: int, hpd: float) -> str:
+def weeks_ready(hrs,hpd):
     if hpd<=0: return "-"
     w=(hrs/hpd)/5
-    if w<1:   return f"{int(hrs/hpd)} days"
-    elif w<4: return f"{w:.1f} weeks"
-    return f"{(w/4):.1f} months"
+    if w<1:   return f"{int(hrs/hpd)}d"
+    elif w<4: return f"{w:.1f}w"
+    return f"{(w/4):.1f}mo"
 
 # =============================================================================
-#  FULL ANALYSIS PIPELINE
+#  PIPELINE
 # =============================================================================
-def run_analysis(resume_text: str, jd_text: str, resume_image_b64: Optional[str]=None) -> dict:
-    cache_k = resume_text or "img"
-    cached  = cache_get(cache_k, jd_text)
-    if cached:
-        cached["_cache_hit"] = True; return cached
-
-    kws = [w.strip() for w in jd_text.split() if len(w)>3][:20]
-    potential_mods = [c for c in CATALOG if any(
-        kw.lower() in c["skill"].lower() or c["skill"].lower() in kw.lower() for kw in kws)][:10]
-
-    raw = mega_call(resume_text=resume_text, jd_text=jd_text,
-                    modules_hint=potential_mods, resume_image_b64=resume_image_b64)
+def run_analysis(resume_text,jd_text,resume_image_b64=None):
+    cache_k=resume_text or "img"
+    cached=cache_get(cache_k,jd_text)
+    if cached: cached["_cache_hit"]=True; return cached
+    kws=[w.strip() for w in jd_text.split() if len(w)>3][:20]
+    potential_mods=[c for c in CATALOG if any(kw.lower() in c["skill"].lower() or c["skill"].lower() in kw.lower() for kw in kws)][:10]
+    raw=mega_call(resume_text=resume_text,jd_text=jd_text,modules_hint=potential_mods,resume_image_b64=resume_image_b64)
     if "error" in raw: return raw
-
-    candidate  = raw.get("candidate",{})
-    jd_data    = raw.get("jd",{})
-    quality    = raw.get("audit",{})
-    rsn_map    = raw.get("reasoning",{})
-
+    candidate=raw.get("candidate",{}); jd_data=raw.get("jd",{})
+    quality=raw.get("audit",{}); rsn_map=raw.get("reasoning",{})
     if not candidate or not jd_data: return {"error":"parse_failed — empty candidate or JD"}
-
-    gp   = analyze_gap(candidate, jd_data)
-    path = build_path(gp, candidate, jd_data)
-    for m in path: m["reasoning"] = rsn_map.get(m["id"], f"Addresses gap in {m['gap_skill']}.")
-    im   = calc_impact(gp, path)
-    sm   = seniority_check(candidate, jd_data)
-    iv   = interview_readiness(gp, candidate)
-    wp   = weekly_plan(path)
-    tf   = transfer_map(candidate, gp)
-    roi  = roi_rank(gp, path)
-    obs  = [{"skill":g["skill"],"status":g["status"],"reason":OBSOLESCENCE_RISK[g["skill"].lower()]}
-            for g in gp if OBSOLESCENCE_RISK.get(g["skill"].lower())]
-    cgm  = max(0, SENIORITY_MAP.get(jd_data.get("seniority_required","Mid"),1)
-                  -SENIORITY_MAP.get(candidate.get("seniority","Mid"),1)) * 18
-
-    result = {"candidate":candidate,"jd":jd_data,"gap_profile":gp,"path":path,
-              "impact":im,"seniority":sm,"quality":quality,"interview":iv,
-              "weekly_plan":wp,"transfers":tf,"roi":roi,"obsolescence":obs,
-              "career_months":cgm,"_cache_hit":False}
-    cache_set(cache_k, jd_text, result)
-    return result
+    gp=analyze_gap(candidate,jd_data)
+    path=build_path(gp,candidate,jd_data)
+    for m in path: m["reasoning"]=rsn_map.get(m["id"],f"Addresses gap in {m['gap_skill']}.")
+    im=calc_impact(gp,path); sm=seniority_check(candidate,jd_data)
+    iv=interview_readiness(gp,candidate); wp=weekly_plan(path)
+    tf=transfer_map(candidate,gp); roi=roi_rank(gp,path)
+    obs=[{"skill":g["skill"],"status":g["status"],"reason":OBSOLESCENCE_RISK[g["skill"].lower()]}
+         for g in gp if OBSOLESCENCE_RISK.get(g["skill"].lower())]
+    cgm=max(0,SENIORITY_MAP.get(jd_data.get("seniority_required","Mid"),1)
+              -SENIORITY_MAP.get(candidate.get("seniority","Mid"),1))*18
+    result={"candidate":candidate,"jd":jd_data,"gap_profile":gp,"path":path,
+            "impact":im,"seniority":sm,"quality":quality,"interview":iv,
+            "weekly_plan":wp,"transfers":tf,"roi":roi,"obsolescence":obs,
+            "career_months":cgm,"_cache_hit":False}
+    cache_set(cache_k,jd_text,result); return result
 
 # =============================================================================
 #  PDF EXPORT
 # =============================================================================
-def build_pdf(c, jd, gp, path, im, ql=None, iv=None) -> io.BytesIO:
-    buf = io.BytesIO()
+def build_pdf(c,jd,gp,path,im,ql=None,iv=None):
+    buf=io.BytesIO()
     if not REPORTLAB: return buf
-    doc    = SimpleDocTemplate(buf, pagesize=letter, topMargin=48, bottomMargin=48, leftMargin=48, rightMargin=48)
-    styles = getSampleStyleSheet()
-    TEAL   = rl_colors.HexColor("#4ECDC4")
-    BD = ParagraphStyle("BD", parent=styles["Normal"], fontSize=10, spaceAfter=5)
-    H1 = ParagraphStyle("H1", parent=styles["Title"], fontSize=20, spaceAfter=4, textColor=TEAL)
-    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=13, spaceAfter=6, spaceBefore=14)
-    IT = ParagraphStyle("IT", parent=styles["Normal"], fontSize=9, spaceAfter=4, leftIndent=18,
-                         textColor=rl_colors.HexColor("#555"), italics=True)
-    story = [
-        Paragraph("SkillForge v5 — AI Adaptive Onboarding Report", H1),
-        Paragraph(f"Candidate: <b>{c.get('name','--')}</b>  |  Role: <b>{jd.get('role_title','--')}</b>  "
-                  f"|  Generated: {datetime.now().strftime('%d %b %Y %H:%M')}", BD),
-        Spacer(1,14),
-    ]
+    doc=SimpleDocTemplate(buf,pagesize=letter,topMargin=48,bottomMargin=48,leftMargin=48,rightMargin=48)
+    styles=getSampleStyleSheet()
+    TEAL=rl_colors.HexColor("#00d4c8")
+    BD=ParagraphStyle("BD",parent=styles["Normal"],fontSize=10,spaceAfter=5)
+    H1=ParagraphStyle("H1",parent=styles["Title"],fontSize=20,spaceAfter=4,textColor=TEAL)
+    H2=ParagraphStyle("H2",parent=styles["Heading2"],fontSize=13,spaceAfter=6,spaceBefore=14)
+    IT=ParagraphStyle("IT",parent=styles["Normal"],fontSize=9,spaceAfter=4,leftIndent=18,
+                       textColor=rl_colors.HexColor("#555"),italics=True)
+    story=[Paragraph("SkillForge v6 — AI Adaptive Onboarding Report",H1),
+           Paragraph(f"Candidate: <b>{c.get('name','--')}</b>  |  Role: <b>{jd.get('role_title','--')}</b>  "
+                     f"|  Generated: {datetime.now().strftime('%d %b %Y %H:%M')}",BD),Spacer(1,14)]
     if ql or iv:
-        story.append(Paragraph("Scores", H2))
-        rows = []
-        if ql: rows += [["ATS Score",f"{ql.get('ats_score','--')}%"],["Grade",ql.get("overall_grade","--")],
-                         ["Completeness",f"{ql.get('completeness_score','--')}%"],["Clarity",f"{ql.get('clarity_score','--')}%"]]
-        if iv: rows += [["Interview Ready",f"{iv['score']}% — {iv['label']}"],
-                         ["Known",str(iv["req_known"])],["Missing",str(iv["req_missing"])]]
-        t = Table([["Metric","Value"]]+rows, colWidths=[200,260])
-        t.setStyle(TableStyle([
-            ("BACKGROUND",(0,0),(-1,0),TEAL),("TEXTCOLOR",(0,0),(-1,0),rl_colors.white),
-            ("FONTSIZE",(0,0),(-1,-1),10),("GRID",(0,0),(-1,-1),0.4,rl_colors.grey),
-            ("ROWBACKGROUNDS",(0,1),(-1,-1),[rl_colors.whitesmoke,rl_colors.white]),
-            ("LEFTPADDING",(0,0),(-1,-1),8),
-        ]))
-        story += [t, Spacer(1,14)]
-    story.append(Paragraph("Learning Roadmap", H2))
+        story.append(Paragraph("Scores",H2))
+        rows=[]
+        if ql: rows+=[["ATS Score",f"{ql.get('ats_score','--')}%"],["Grade",ql.get("overall_grade","--")],
+                       ["Completeness",f"{ql.get('completeness_score','--')}%"],["Clarity",f"{ql.get('clarity_score','--')}%"]]
+        if iv: rows+=[["Interview Ready",f"{iv['score']}% — {iv['label']}"],["Known",str(iv["req_known"])],["Missing",str(iv["req_missing"])]]
+        t=Table([["Metric","Value"]]+rows,colWidths=[200,260])
+        t.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),TEAL),("TEXTCOLOR",(0,0),(-1,0),rl_colors.white),
+                                ("FONTSIZE",(0,0),(-1,-1),10),("GRID",(0,0),(-1,-1),0.4,rl_colors.grey),
+                                ("ROWBACKGROUNDS",(0,1),(-1,-1),[rl_colors.whitesmoke,rl_colors.white]),
+                                ("LEFTPADDING",(0,0),(-1,-1),8)]))
+        story+=[t,Spacer(1,14)]
+    story.append(Paragraph("Learning Roadmap",H2))
     for i,m in enumerate(path):
-        story.append(Paragraph(
-            f"<b>{i+1}. {'[CRITICAL] ' if m.get('is_critical') else ''}{m['title']}</b>"
-            f" — {m['level']} / {m['duration_hrs']}h", BD))
-        if m.get("reasoning"): story.append(Paragraph(f"→ {m['reasoning']}", IT))
-    doc.build(story); buf.seek(0)
-    return buf
+        story.append(Paragraph(f"<b>{i+1}. {'[CRITICAL] ' if m.get('is_critical') else ''}{m['title']}</b> — {m['level']} / {m['duration_hrs']}h",BD))
+        if m.get("reasoning"): story.append(Paragraph(f"→ {m['reasoning']}",IT))
+    doc.build(story); buf.seek(0); return buf
 
 # =============================================================================
-#  PLOTLY CHARTS
+#  CHARTS
 # =============================================================================
-_PLOTBG = "rgba(0,0,0,0)"
-_GRID   = "#1E2A3A"
+_BG="#0a0f1e"; _PLOTBG="rgba(0,0,0,0)"; _GRID="#1a2540"
 
-def radar_chart(gp: List[dict]) -> go.Figure:
-    items = gp[:10]
+def radar_chart(gp):
+    items=gp[:10]
     if not items: return go.Figure()
-    theta = [g["skill"][:14] for g in items]
-    fig = go.Figure(data=[
-        go.Scatterpolar(r=[10]*len(items), theta=theta, fill="toself", name="JD Required",
-                        line=dict(color="#FF6B6B",width=2), opacity=0.20),
-        go.Scatterpolar(r=[g.get("original_prof",g["proficiency"]) for g in items], theta=theta,
-                        fill="toself", name="Before Decay",
-                        line=dict(color="#FFE66D",width=1,dash="dot"), opacity=0.18),
-        go.Scatterpolar(r=[g["proficiency"] for g in items], theta=theta, fill="toself",
-                        name="Current", line=dict(color="#4ECDC4",width=2), opacity=0.75),
+    theta=[g["skill"][:14] for g in items]
+    fig=go.Figure(data=[
+        go.Scatterpolar(r=[10]*len(items),theta=theta,fill="toself",name="JD Required",line=dict(color="#f55142",width=2),opacity=0.18),
+        go.Scatterpolar(r=[g.get("original_prof",g["proficiency"]) for g in items],theta=theta,fill="toself",name="Before Decay",line=dict(color="#f5c842",width=1,dash="dot"),opacity=0.18),
+        go.Scatterpolar(r=[g["proficiency"] for g in items],theta=theta,fill="toself",name="Current",line=dict(color="#00d4c8",width=2.5),opacity=0.80),
     ])
-    fig.update_layout(
-        polar=dict(bgcolor=_PLOTBG,
-                   radialaxis=dict(visible=True,range=[0,10],gridcolor=_GRID,tickfont=dict(size=9,color="#555")),
-                   angularaxis=dict(gridcolor=_GRID)),
-        paper_bgcolor=_PLOTBG, plot_bgcolor=_PLOTBG,
-        font=dict(color="#C9D1D9",family="sans-serif"),
-        showlegend=True, legend=dict(bgcolor=_PLOTBG,x=0.78,y=1.15,font=dict(size=10)),
-        margin=dict(l=30,r=30,t=40,b=30), height=360,
-    )
+    fig.update_layout(polar=dict(bgcolor=_PLOTBG,
+                                  radialaxis=dict(visible=True,range=[0,10],gridcolor=_GRID,tickfont=dict(size=9,color="#445")),
+                                  angularaxis=dict(gridcolor=_GRID)),
+                      paper_bgcolor=_PLOTBG,plot_bgcolor=_PLOTBG,
+                      font=dict(color="#b0bcd4",family="sans-serif"),
+                      showlegend=True,legend=dict(bgcolor=_PLOTBG,x=0.78,y=1.15,font=dict(size=10)),
+                      margin=dict(l=30,r=30,t=40,b=30),height=340)
     return fig
 
-def timeline_chart(path: List[dict]) -> go.Figure:
+def timeline_chart(path):
     if not path: return go.Figure()
-    lc = {"Critical":"#FF6B6B","Beginner":"#4ECDC4","Intermediate":"#FFE66D","Advanced":"#FF9A9A"}
-    shown, fig = set(), go.Figure()
+    lc={"Critical":"#f55142","Beginner":"#00d4c8","Intermediate":"#f5c842","Advanced":"#f5a623"}
+    shown,fig=set(),go.Figure()
     for i,m in enumerate(path):
-        k = "Critical" if m.get("is_critical") else m["level"]
-        show = k not in shown; shown.add(k)
-        fig.add_trace(go.Bar(
-            x=[m["duration_hrs"]], y=[f"#{i+1} {m['title'][:28]}"], orientation="h",
-            marker=dict(color=lc.get(k,"#888"),opacity=0.88,line=dict(width=0)),
-            name=k, legendgroup=k, showlegend=show,
-            hovertemplate=f"<b>{m['title']}</b><br>{m['level']} · {m['duration_hrs']}h<extra></extra>",
-        ))
-    fig.update_layout(
-        paper_bgcolor=_PLOTBG, plot_bgcolor="rgba(15,22,36,0.6)",
-        font=dict(color="#C9D1D9"),
-        xaxis=dict(title="Hours",gridcolor=_GRID,zeroline=False),
-        yaxis=dict(gridcolor=_GRID,tickfont=dict(size=10)),
-        margin=dict(l=10,r=20,t=10,b=40), height=max(300,len(path)*40),
-        legend=dict(bgcolor=_PLOTBG,orientation="h",y=1.03), barmode="overlay",
-    )
+        k="Critical" if m.get("is_critical") else m["level"]
+        show=k not in shown; shown.add(k)
+        fig.add_trace(go.Bar(x=[m["duration_hrs"]],y=[f"#{i+1} {m['title'][:28]}"],orientation="h",
+                             marker=dict(color=lc.get(k,"#888"),opacity=0.88,line=dict(width=0)),
+                             name=k,legendgroup=k,showlegend=show,
+                             hovertemplate=f"<b>{m['title']}</b><br>{m['level']} · {m['duration_hrs']}h<extra></extra>"))
+    fig.update_layout(paper_bgcolor=_PLOTBG,plot_bgcolor="rgba(10,15,30,0.6)",font=dict(color="#b0bcd4"),
+                      xaxis=dict(title="Hours",gridcolor=_GRID,zeroline=False),
+                      yaxis=dict(gridcolor=_GRID,tickfont=dict(size=10)),
+                      margin=dict(l=10,r=20,t=10,b=40),height=max(280,len(path)*38),
+                      legend=dict(bgcolor=_PLOTBG,orientation="h",y=1.03),barmode="overlay")
     return fig
 
-def roi_chart(roi_list: List[dict]) -> go.Figure:
+def roi_chart(roi_list):
     if not roi_list: return go.Figure()
-    top = roi_list[:10]
-    fig = go.Figure(go.Bar(
-        x=[m["roi"] for m in top], y=[m["title"][:28] for m in top], orientation="h",
-        marker=dict(color=["#FF6B6B" if m["is_required"] else "#4ECDC4" for m in top],opacity=0.85),
-        hovertemplate="<b>%{y}</b><br>ROI: %{x}<extra></extra>",
-    ))
-    fig.update_layout(
-        paper_bgcolor=_PLOTBG, plot_bgcolor="rgba(15,22,36,0.4)", font=dict(color="#C9D1D9"),
-        xaxis=dict(title="ROI Index (higher = learn first)",gridcolor=_GRID,zeroline=False),
-        yaxis=dict(gridcolor=_GRID,autorange="reversed"),
-        margin=dict(l=10,r=20,t=10,b=40), height=max(260,len(top)*36),
-    )
+    top=roi_list[:10]
+    fig=go.Figure(go.Bar(x=[m["roi"] for m in top],y=[m["title"][:28] for m in top],orientation="h",
+                         marker=dict(color=["#f55142" if m["is_required"] else "#00d4c8" for m in top],opacity=0.88),
+                         hovertemplate="<b>%{y}</b><br>ROI: %{x}<extra></extra>"))
+    fig.update_layout(paper_bgcolor=_PLOTBG,plot_bgcolor="rgba(10,15,30,0.4)",font=dict(color="#b0bcd4"),
+                      xaxis=dict(title="ROI Index",gridcolor=_GRID,zeroline=False),
+                      yaxis=dict(gridcolor=_GRID,autorange="reversed"),
+                      margin=dict(l=10,r=20,t=10,b=40),height=max(240,len(top)*34))
     return fig
 
-def priority_matrix(gp: List[dict]) -> go.Figure:
+def priority_matrix(gp):
     ease_map={"Beginner":9,"Intermediate":5,"Advanced":2}
-    pts=[{"skill":g["skill"],
-           "ease":ease_map.get((g.get("catalog_course") or {}).get("level","Intermediate"),5),
+    pts=[{"skill":g["skill"],"ease":ease_map.get((g.get("catalog_course") or {}).get("level","Intermediate"),5),
            "impact":min(10,g.get("demand",1)*3+(3 if g["is_required"] else 0)),
            "hrs":(g.get("catalog_course") or {}).get("duration_hrs",6),"status":g["status"]}
           for g in gp if g["status"]!="Known" and g.get("catalog_course")]
     if not pts: return go.Figure()
     fig=go.Figure()
-    for sl,col in [("Missing","#FF6B6B"),("Partial","#FFE66D")]:
+    for sl,col in [("Missing","#f55142"),("Partial","#f5c842")]:
         sub=[p for p in pts if p["status"]==sl]
         if not sub: continue
-        fig.add_trace(go.Scatter(
-            x=[p["ease"] for p in sub], y=[p["impact"] for p in sub], mode="markers+text",
-            marker=dict(size=[max(14,p["hrs"]*2.8) for p in sub],color=col,opacity=0.75),
-            text=[p["skill"][:13] for p in sub], textposition="top center",
-            textfont=dict(size=9,color="#C9D1D9"), name=sl,
-            hovertemplate="<b>%{text}</b><br>Ease:%{x:.1f} Impact:%{y:.1f}<extra></extra>",
-        ))
+        fig.add_trace(go.Scatter(x=[p["ease"] for p in sub],y=[p["impact"] for p in sub],mode="markers+text",
+                                 marker=dict(size=[max(14,p["hrs"]*2.8) for p in sub],color=col,opacity=0.75),
+                                 text=[p["skill"][:13] for p in sub],textposition="top center",
+                                 textfont=dict(size=9,color="#b0bcd4"),name=sl,
+                                 hovertemplate="<b>%{text}</b><br>Ease:%{x:.1f} Impact:%{y:.1f}<extra></extra>"))
     for x,y,t in [(2.5,8.5,"HIGH PRIORITY"),(7.5,8.5,"QUICK WIN"),(2.5,2.5,"LONG HAUL"),(7.5,2.5,"NICE TO HAVE")]:
-        fig.add_annotation(x=x,y=y,text=t,showarrow=False,font=dict(size=9,color="#3D4F6B"))
+        fig.add_annotation(x=x,y=y,text=t,showarrow=False,font=dict(size=9,color="#2d3f60"))
     fig.add_hline(y=5.5,line_dash="dot",line_color=_GRID)
     fig.add_vline(x=5.5,line_dash="dot",line_color=_GRID)
-    fig.update_layout(
-        paper_bgcolor=_PLOTBG, plot_bgcolor="rgba(15,22,36,0.4)", font=dict(color="#C9D1D9"),
-        xaxis=dict(title="Ease (Beginner=easy)",range=[0,11],gridcolor=_GRID,zeroline=False),
-        yaxis=dict(title="Impact (Demand × Req)",range=[0,11],gridcolor=_GRID,zeroline=False),
-        margin=dict(l=20,r=20,t=20,b=40), showlegend=True, height=400,
-        legend=dict(bgcolor=_PLOTBG,x=0,y=1.1,orientation="h"),
-    )
+    fig.update_layout(paper_bgcolor=_PLOTBG,plot_bgcolor="rgba(10,15,30,0.4)",font=dict(color="#b0bcd4"),
+                      xaxis=dict(title="Ease",range=[0,11],gridcolor=_GRID,zeroline=False),
+                      yaxis=dict(title="Impact",range=[0,11],gridcolor=_GRID,zeroline=False),
+                      margin=dict(l=20,r=20,t=20,b=40),showlegend=True,height=380,
+                      legend=dict(bgcolor=_PLOTBG,x=0,y=1.1,orientation="h"))
     return fig
 
-def salary_chart(s: dict) -> go.Figure:
+def salary_chart(s):
     if not s or not s.get("median_lpa"): return go.Figure()
-    fig = go.Figure(go.Bar(
-        x=["Min","Median","Max"],
-        y=[s.get("min_lpa",0),s.get("median_lpa",0),s.get("max_lpa",0)],
-        marker_color=["#4ECDC4","#FFE66D","#FF6B6B"], opacity=0.88,
-        text=[f"₹{v}L" for v in [s.get("min_lpa",0),s.get("median_lpa",0),s.get("max_lpa",0)]],
-        textposition="outside",
-        hovertemplate="<b>%{x}</b><br>₹%{y}L/yr<extra></extra>",
-    ))
-    fig.update_layout(
-        paper_bgcolor=_PLOTBG, plot_bgcolor="rgba(15,22,36,0.4)", font=dict(color="#C9D1D9"),
-        yaxis=dict(title="LPA (₹ Lakhs/yr)",gridcolor=_GRID),
-        xaxis=dict(gridcolor=_GRID), margin=dict(l=20,r=20,t=30,b=40), height=280,
-    )
+    vals=[s.get("min_lpa",0),s.get("median_lpa",0),s.get("max_lpa",0)]
+    fig=go.Figure(go.Bar(x=["Min","Median","Max"],y=vals,
+                         marker_color=["#00d4c8","#f5c842","#f55142"],opacity=0.9,
+                         text=[f"₹{v}L" if s.get("currency","INR")=="INR" else f"${v}k" for v in vals],
+                         textposition="outside",hovertemplate="<b>%{x}</b><br>%{y}<extra></extra>"))
+    fig.update_layout(paper_bgcolor=_PLOTBG,plot_bgcolor="rgba(10,15,30,0.4)",font=dict(color="#b0bcd4"),
+                      yaxis=dict(title=f"{s.get('currency','INR')} / yr",gridcolor=_GRID),
+                      xaxis=dict(gridcolor=_GRID),margin=dict(l=20,r=20,t=20,b=40),height=260)
     return fig
 
 # =============================================================================
-#  STREAMLIT CSS
+#  CSS — v6 redesign: refined dark, glass cards, tighter layout
 # =============================================================================
-THEME_CSS = """
+CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
 
-*, *::before, *::after { box-sizing: border-box; }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
 html, body, [class*="css"] {
-    font-family: 'Plus Jakarta Sans', sans-serif !important;
-    background: #0f1623 !important;
-    color: #c9d1d9 !important;
+    font-family: 'DM Sans', sans-serif !important;
+    background: #080d1a !important;
+    color: #c0ccdf !important;
 }
-.stApp { background: #0f1623 !important; }
+.stApp { background: #080d1a !important; }
 .main .block-container { padding: 0 !important; max-width: 100% !important; }
-section[data-testid="stSidebar"] { display: none !important; }
-footer { display: none !important; }
-#MainMenu { display: none !important; }
-header[data-testid="stHeader"] { display: none !important; }
+section[data-testid="stSidebar"],footer,#MainMenu,header[data-testid="stHeader"]{ display:none!important; }
 
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #2a3a50; border-radius: 99px; }
+::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-thumb { background:#1e2d4a; border-radius:99px; }
 
+/* ── NAV ── */
 .sf-nav {
-    background: rgba(10,14,26,0.97);
-    border-bottom: 1px solid rgba(255,255,255,0.07);
-    padding: 0 32px;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    position: sticky;
-    top: 0;
-    z-index: 1000;
-    backdrop-filter: blur(12px);
+    background: rgba(5,9,20,0.95);
+    border-bottom: 1px solid rgba(0,212,200,0.12);
+    padding: 0 28px;
+    height: 54px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 1000;
+    backdrop-filter: blur(20px);
 }
-.sf-logo { display: flex; flex-direction: column; }
-.sf-logo-main {
-    font-family: 'Plus Jakarta Sans', sans-serif;
-    font-size: 1.3rem; font-weight: 800;
-    color: #4ECDC4; letter-spacing: -0.03em;
+.sf-brand {
+    font-family: 'Syne', sans-serif;
+    font-size: 1.25rem; font-weight: 800;
+    background: linear-gradient(135deg, #00d4c8 0%, #00a8e8 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    letter-spacing: -0.02em;
 }
-.sf-logo-sub {
-    font-size: 0.56rem; letter-spacing: 0.18em;
-    text-transform: uppercase; color: #3d4f6b;
-    margin-top: -1px;
-}
-.sf-nav-right { display: flex; gap: 8px; align-items: center; }
-.sf-pill {
-    font-size: 0.68rem; padding: 4px 11px;
-    border-radius: 99px;
-    border: 1px solid rgba(255,255,255,0.1);
-    color: #6b7a99;
-    background: transparent;
+.sf-brand-sub { font-size: 0.52rem; letter-spacing: 0.2em; color: #2d4060; text-transform: uppercase; margin-top: -2px; font-family: 'DM Mono', monospace; }
+.sf-tags { display: flex; gap: 6px; align-items: center; }
+.sf-tag {
+    font-size: 0.62rem; padding: 3px 9px; border-radius: 99px;
+    border: 1px solid rgba(0,212,200,0.2); color: #00d4c8;
+    background: rgba(0,212,200,0.05); font-family: 'DM Mono', monospace;
     white-space: nowrap;
 }
-.sf-pill.active {
-    border-color: rgba(78,205,196,0.4);
-    color: #4ECDC4;
-    background: rgba(78,205,196,0.06);
-}
-.sf-pill.light-btn {
-    border-color: rgba(255,255,255,0.15);
-    color: #c9d1d9;
-    cursor: pointer;
-}
+.sf-tag.web { border-color: rgba(0,168,232,0.3); color: #00a8e8; background: rgba(0,168,232,0.05); }
 
+/* ── HERO (compact) ── */
 .sf-hero {
-    text-align: center;
-    padding: 64px 24px 48px;
+    padding: 36px 28px 20px;
+    display: flex; align-items: center; justify-content: space-between; gap: 24px;
 }
-.sf-hero h1 {
-    font-size: clamp(2.2rem, 4.5vw, 3.8rem);
-    font-weight: 800;
-    letter-spacing: -0.03em;
-    line-height: 1.1;
-    margin: 0 0 16px;
-    color: #e6edf3;
+.sf-hero-text h1 {
+    font-family: 'Syne', sans-serif; font-size: clamp(1.6rem, 3vw, 2.6rem);
+    font-weight: 800; letter-spacing: -0.03em; color: #e8f0ff; line-height: 1.1;
 }
-.sf-hero h1 span { color: #4ECDC4; }
-.sf-hero p {
-    color: #8892a4;
-    font-size: 1rem;
-    max-width: 540px;
-    margin: 0 auto;
-    line-height: 1.65;
-}
+.sf-hero-text h1 em { color: #00d4c8; font-style: normal; }
+.sf-hero-text p { font-size: 0.82rem; color: #5a7090; margin-top: 6px; max-width: 480px; line-height: 1.5; }
+.sf-hero-stats { display: flex; gap: 20px; }
+.sf-stat { text-align: center; }
+.sf-stat-val { font-family: 'DM Mono', monospace; font-size: 1.4rem; font-weight: 700; color: #00d4c8; }
+.sf-stat-lbl { font-size: 0.6rem; color: #2d4060; text-transform: uppercase; letter-spacing: 0.08em; }
 
-.sf-samples {
-    text-align: center;
-    padding: 0 24px 32px;
-}
-.sf-samples-label {
-    font-size: 0.75rem; color: #4a5568;
-    margin-bottom: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-}
+/* ── SAMPLE CHIPS ── */
+.sf-chips { display: flex; gap: 8px; padding: 0 28px 20px; flex-wrap: wrap; align-items: center; }
+.sf-chips-lbl { font-size: 0.65rem; color: #2d4060; text-transform: uppercase; letter-spacing: 0.1em; margin-right: 4px; white-space: nowrap; }
 
+/* ── INPUT PANEL ── */
+.sf-input-wrap {
+    padding: 0 28px 24px;
+    display: grid;
+    grid-template-columns: 1fr 1fr 220px;
+    gap: 14px;
+    align-items: start;
+}
+@media(max-width:900px){ .sf-input-wrap{grid-template-columns:1fr;} }
+
+.sf-card {
+    background: rgba(12,18,35,0.8);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 18px;
+    backdrop-filter: blur(8px);
+}
+.sf-card:hover { border-color: rgba(0,212,200,0.18); }
+.sf-card-hd {
+    font-family: 'Syne', sans-serif; font-size: 0.78rem; font-weight: 700;
+    color: #e8f0ff; margin-bottom: 12px; letter-spacing: 0.02em;
+    display: flex; align-items: center; gap: 7px;
+}
+.sf-card-hd span { font-size: 1rem; }
+
+/* Streamlit widget overrides */
 [data-testid="stFileUploadDropzone"] {
-    background: rgba(78,205,196,0.03) !important;
-    border: 1.5px dashed rgba(78,205,196,0.3) !important;
-    border-radius: 10px !important;
-    padding: 20px !important;
+    background: rgba(0,212,200,0.03) !important;
+    border: 1.5px dashed rgba(0,212,200,0.2) !important;
+    border-radius: 8px !important; padding: 14px !important;
 }
 [data-testid="stFileUploadDropzone"]:hover {
-    border-color: rgba(78,205,196,0.6) !important;
-    background: rgba(78,205,196,0.06) !important;
-}
-[data-testid="stFileUploadDropzone"] label {
-    color: #8892a4 !important;
-    font-size: 0.88rem !important;
+    border-color: rgba(0,212,200,0.45) !important;
+    background: rgba(0,212,200,0.05) !important;
 }
 [data-testid="stFileUploadDropzone"] button {
-    background: transparent !important;
-    border: 1px solid rgba(78,205,196,0.4) !important;
-    color: #4ECDC4 !important;
-    border-radius: 6px !important;
-    font-family: 'Plus Jakarta Sans', sans-serif !important;
+    background: transparent !important; border: 1px solid rgba(0,212,200,0.35) !important;
+    color: #00d4c8 !important; border-radius: 6px !important; font-size: 0.75rem !important;
 }
+textarea {
+    background: rgba(6,10,22,0.9) !important;
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    border-radius: 8px !important; color: #b0bcd4 !important;
+    font-size: 0.78rem !important; font-family: 'DM Mono', monospace !important;
+    resize: vertical !important;
+}
+textarea:focus { border-color: rgba(0,212,200,0.4) !important; }
+textarea::placeholder { color: #2d4060 !important; }
 
+/* Buttons */
 .stButton > button {
-    background: #4ECDC4 !important;
-    border: none !important;
-    border-radius: 10px !important;
-    color: #0a0e1a !important;
-    font-family: 'Plus Jakarta Sans', sans-serif !important;
-    font-weight: 700 !important;
-    font-size: 0.95rem !important;
-    padding: 14px 0 !important;
-    width: 100% !important;
-    transition: all 0.2s !important;
-    letter-spacing: -0.01em !important;
+    background: linear-gradient(135deg, #00d4c8, #00a8e8) !important;
+    border: none !important; border-radius: 10px !important;
+    color: #04080f !important; font-family: 'Syne', sans-serif !important;
+    font-weight: 700 !important; font-size: 0.88rem !important;
+    padding: 13px 0 !important; width: 100% !important;
+    transition: all 0.2s !important; letter-spacing: 0.02em !important;
 }
 .stButton > button:hover {
-    background: #3dbdb5 !important;
-    transform: translateY(-2px) !important;
-    box-shadow: 0 8px 24px rgba(78,205,196,0.3) !important;
+    opacity: 0.88 !important; transform: translateY(-2px) !important;
+    box-shadow: 0 8px 28px rgba(0,212,200,0.3) !important;
 }
 .stButton > button:active { transform: translateY(0) !important; }
 
-textarea {
-    background: #0f1623 !important;
-    border: 1px solid rgba(255,255,255,0.08) !important;
-    border-radius: 8px !important;
-    color: #c9d1d9 !important;
-    font-size: 0.82rem !important;
-    font-family: 'JetBrains Mono', monospace !important;
-    resize: vertical !important;
+/* Sample chip buttons — override with class */
+.sample-chip > button {
+    background: rgba(12,20,40,0.9) !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
+    color: #8090b0 !important; font-size: 0.75rem !important;
+    font-weight: 600 !important; padding: 7px 14px !important;
+    border-radius: 99px !important; font-family: 'DM Sans', sans-serif !important;
 }
-textarea:focus {
-    border-color: rgba(78,205,196,0.45) !important;
-    box-shadow: none !important;
+.sample-chip > button:hover {
+    border-color: rgba(0,212,200,0.45) !important; color: #00d4c8 !important;
+    background: rgba(0,212,200,0.06) !important;
+    transform: translateY(-1px) !important; box-shadow: none !important;
 }
-textarea::placeholder { color: #3d4f6b !important; }
 
+/* Tabs */
 .stTabs [data-baseweb="tab-list"] {
     background: transparent !important;
-    border-bottom: 1px solid rgba(255,255,255,0.07) !important;
-    gap: 4px !important;
+    border-bottom: 1px solid rgba(255,255,255,0.06) !important; gap: 2px !important;
+    padding: 0 28px !important;
 }
 .stTabs [data-baseweb="tab"] {
-    background: transparent !important;
-    border: none !important;
-    color: #4a5568 !important;
-    font-size: 0.85rem !important;
-    font-family: 'Plus Jakarta Sans', sans-serif !important;
-    padding: 10px 20px !important;
-    border-radius: 0 !important;
+    background: transparent !important; border: none !important;
+    color: #3a5070 !important; font-size: 0.82rem !important;
+    font-family: 'DM Sans', sans-serif !important;
+    padding: 10px 18px !important; border-radius: 0 !important;
 }
 .stTabs [aria-selected="true"] {
-    color: #4ECDC4 !important;
-    border-bottom: 2px solid #4ECDC4 !important;
-    background: transparent !important;
+    color: #00d4c8 !important;
+    border-bottom: 2px solid #00d4c8 !important; background: transparent !important;
 }
-.stTabs [data-baseweb="tab-panel"] { padding-top: 20px !important; }
+.stTabs [data-baseweb="tab-panel"] { padding: 24px 28px !important; }
 
+/* Metrics */
 [data-testid="stMetric"] {
-    background: #141c2e !important;
-    border: 1px solid rgba(255,255,255,0.07) !important;
-    border-radius: 12px !important;
-    padding: 14px 16px !important;
+    background: rgba(12,18,35,0.8) !important;
+    border: 1px solid rgba(255,255,255,0.06) !important;
+    border-radius: 10px !important; padding: 14px 16px !important;
 }
 [data-testid="stMetricValue"] {
-    font-family: 'JetBrains Mono', monospace !important;
-    font-size: 1.8rem !important;
-    color: #4ECDC4 !important;
-    font-weight: 500 !important;
+    font-family: 'DM Mono', monospace !important; font-size: 1.7rem !important;
+    color: #00d4c8 !important; font-weight: 500 !important;
 }
 [data-testid="stMetricLabel"] {
-    color: #4a5568 !important;
-    font-size: 0.68rem !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.07em !important;
+    color: #3a5070 !important; font-size: 0.62rem !important;
+    text-transform: uppercase !important; letter-spacing: 0.08em !important;
 }
-[data-testid="stMetricDelta"] { font-size: 0.75rem !important; }
 
+/* Expanders */
 [data-testid="stExpander"] {
-    background: #141c2e !important;
-    border: 1px solid rgba(255,255,255,0.07) !important;
-    border-radius: 10px !important;
-    margin-bottom: 6px !important;
+    background: rgba(12,18,35,0.7) !important;
+    border: 1px solid rgba(255,255,255,0.06) !important;
+    border-radius: 8px !important; margin-bottom: 5px !important;
 }
 [data-testid="stExpander"] summary {
-    color: #c9d1d9 !important;
-    font-size: 0.85rem !important;
-    font-weight: 500 !important;
+    color: #b0bcd4 !important; font-size: 0.82rem !important; font-weight: 500 !important;
 }
 
+/* Progress bar */
 [data-testid="stProgressBar"] > div > div {
-    background: linear-gradient(90deg, #4ECDC4, #44B8B0) !important;
+    background: linear-gradient(90deg,#00d4c8,#00a8e8) !important;
 }
 [data-testid="stProgressBar"] > div {
-    background: rgba(255,255,255,0.06) !important;
-    border-radius: 99px !important;
+    background: rgba(255,255,255,0.05) !important; border-radius: 99px !important;
 }
 
+/* Download button */
 [data-testid="stDownloadButton"] > button {
-    background: rgba(78,205,196,0.1) !important;
-    border: 1px solid rgba(78,205,196,0.3) !important;
-    color: #4ECDC4 !important;
-    font-weight: 600 !important;
+    background: rgba(0,212,200,0.08) !important;
+    border: 1px solid rgba(0,212,200,0.3) !important;
+    color: #00d4c8 !important; font-weight: 600 !important;
 }
 
+/* Selectbox */
 [data-testid="stSelectbox"] > div > div {
-    background: #141c2e !important;
-    border: 1px solid rgba(255,255,255,0.1) !important;
-    color: #c9d1d9 !important;
+    background: rgba(12,18,35,0.9) !important;
+    border: 1px solid rgba(255,255,255,0.08) !important; color: #b0bcd4 !important;
 }
 
-.sf-warn {
-    background: rgba(255,193,7,0.07);
-    border: 1px solid rgba(255,193,7,0.25);
-    border-radius: 10px;
-    padding: 11px 16px;
-    font-size: 0.82rem;
-    color: #ffd54f;
-    margin-bottom: 14px;
-}
-.sf-info {
-    background: rgba(78,205,196,0.07);
-    border: 1px solid rgba(78,205,196,0.2);
-    border-radius: 10px;
-    padding: 11px 16px;
-    font-size: 0.82rem;
-    color: #4ECDC4;
-    margin-bottom: 14px;
-}
+/* Select slider */
+[data-testid="stSlider"] { padding: 0 !important; }
 
-.sf-sec { font-size: 0.95rem; font-weight: 700; color: #e6edf3; margin-bottom: 3px; }
-.sf-sec-sub { font-size: 0.73rem; color: #4a5568; margin-bottom: 12px; }
+/* ── RESULT ELEMENTS ── */
+.kpi-bar { padding: 20px 28px; display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+@media(max-width:900px){ .kpi-bar{grid-template-columns:repeat(3,1fr);} }
 
-.sf-skill-row {
-    display: flex; align-items: center; gap: 8px;
-    margin-bottom: 9px; font-size: 0.8rem;
-}
-.sf-skill-name { min-width: 120px; color: #c9d1d9; }
-.sf-skill-track { flex: 1; height: 6px; background: rgba(255,255,255,0.06); border-radius: 99px; overflow: hidden; }
-.sf-skill-fill  { height: 100%; border-radius: 99px; transition: width 1s ease; }
-.sf-skill-val   { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: #4a5568; min-width: 28px; text-align: right; }
+.sf-sec { font-family:'Syne',sans-serif; font-size:0.88rem; font-weight:700; color:#e8f0ff; margin-bottom:2px; }
+.sf-sec-sub { font-size:0.7rem; color:#3a5070; margin-bottom:12px; }
 
-.badge { font-size: 0.62rem; border-radius: 4px; padding: 2px 7px; font-weight: 600; letter-spacing: 0.03em; margin-left: 4px; }
-.bk { background: rgba(78,205,196,0.12); color: #4ECDC4; border: 1px solid rgba(78,205,196,0.3); }
-.bp { background: rgba(255,230,109,0.1); color: #FFE66D; border: 1px solid rgba(255,230,109,0.3); }
-.bm { background: rgba(255,107,107,0.1); color: #FF6B6B; border: 1px solid rgba(255,107,107,0.3); }
-.bh { background: rgba(255,107,107,0.1); color: #FF6B6B; border: 1px solid rgba(255,107,107,0.25); border-radius: 99px; font-size: 0.6rem; padding: 1px 7px; }
-.bg { background: rgba(255,230,109,0.08); color: #FFE66D; border: 1px solid rgba(255,230,109,0.25); border-radius: 99px; font-size: 0.6rem; padding: 1px 7px; }
+.sf-skill-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:0.78rem; }
+.sf-skill-name { min-width:110px; color:#b0bcd4; font-size:0.76rem; }
+.sf-skill-track { flex:1; height:5px; background:rgba(255,255,255,0.05); border-radius:99px; overflow:hidden; }
+.sf-skill-fill  { height:100%; border-radius:99px; }
+.sf-skill-val   { font-family:'DM Mono',monospace; font-size:0.68rem; color:#3a5070; min-width:30px; text-align:right; }
 
-.sf-mod {
-    background: #1a2438;
-    border: 1px solid rgba(255,255,255,0.06);
-    border-left: 3px solid #4ECDC4;
-    border-radius: 8px;
-    padding: 12px 14px;
-    margin-bottom: 8px;
-}
-.sf-mod.crit { border-left-color: #FF6B6B; box-shadow: 0 0 12px rgba(255,107,107,0.1); }
-.sf-mod.adv  { border-left-color: #FF9A9A; }
-.sf-mod.int  { border-left-color: #FFE66D; }
-.sf-mod-title { font-size: 0.84rem; font-weight: 600; color: #e6edf3; display: flex; justify-content: space-between; gap: 8px; }
-.sf-mod-meta  { font-size: 0.71rem; color: #4a5568; margin-top: 3px; }
-.sf-mod-reason { font-size: 0.75rem; color: #6b7a99; margin-top: 7px; padding-top: 7px; border-top: 1px solid rgba(255,255,255,0.05); font-style: italic; line-height: 1.5; }
+.badge { font-size:0.58rem; border-radius:4px; padding:2px 6px; font-weight:700; letter-spacing:0.04em; margin-left:3px; }
+.bk { background:rgba(0,212,200,0.1); color:#00d4c8; border:1px solid rgba(0,212,200,0.25); }
+.bp { background:rgba(245,200,66,0.1); color:#f5c842; border:1px solid rgba(245,200,66,0.25); }
+.bm { background:rgba(245,81,66,0.1); color:#f55142; border:1px solid rgba(245,81,66,0.25); }
 
-.sf-prow { display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 0.82rem; }
-.sf-prow:last-child { border-bottom: none; }
-.sf-pk { color: #4a5568; }
-.sf-pv { font-weight: 600; color: #c9d1d9; text-align: right; }
+.sf-mod { background:rgba(12,20,38,0.8); border:1px solid rgba(255,255,255,0.05); border-left:3px solid #00d4c8; border-radius:8px; padding:11px 13px; margin-bottom:7px; }
+.sf-mod.crit { border-left-color:#f55142; box-shadow:0 0 10px rgba(245,81,66,0.08); }
+.sf-mod.int  { border-left-color:#f5c842; }
+.sf-mod.adv  { border-left-color:#f5a623; }
+.sf-mod-title { font-size:0.82rem; font-weight:600; color:#e8f0ff; display:flex; justify-content:space-between; gap:8px; }
+.sf-mod-meta  { font-size:0.68rem; color:#3a5070; margin-top:3px; }
+.sf-mod-reason { font-size:0.72rem; color:#5a7090; margin-top:6px; padding-top:6px; border-top:1px solid rgba(255,255,255,0.04); font-style:italic; line-height:1.5; }
 
-.tf-item { background: rgba(167,139,250,0.05); border-left: 2px solid #a78bfa; border-radius: 6px; padding: 7px 11px; margin-bottom: 6px; font-size: 0.79rem; color: #8892a4; }
-.ob-item { background: rgba(255,107,107,0.04); border-left: 2px solid #ff6b6b; border-radius: 6px; padding: 7px 11px; margin-bottom: 6px; font-size: 0.79rem; color: #8892a4; }
+.sf-course-link { background:rgba(0,168,232,0.05); border:1px solid rgba(0,168,232,0.15); border-radius:7px; padding:8px 12px; margin-bottom:6px; font-size:0.75rem; }
+.sf-course-link a { color:#00a8e8; text-decoration:none; font-weight:600; }
+.sf-course-link a:hover { text-decoration:underline; }
+.sf-course-plat { font-size:0.62rem; color:#3a5070; margin-top:2px; }
 
-.sf-ar { background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04); border-radius: 6px; padding: 6px 10px; margin-bottom: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; color: #4a5568; display: flex; gap: 10px; flex-wrap: wrap; }
+.sf-insight { background:rgba(0,212,200,0.04); border-left:2px solid #00d4c8; border-radius:0 6px 6px 0; padding:7px 12px; margin-bottom:5px; font-size:0.76rem; color:#8090b0; line-height:1.5; }
+.tf-item { background:rgba(130,100,240,0.05); border-left:2px solid #8264f0; border-radius:6px; padding:7px 11px; margin-bottom:5px; font-size:0.76rem; color:#8090b0; }
+.ob-item { background:rgba(245,81,66,0.04); border-left:2px solid #f55142; border-radius:6px; padding:7px 11px; margin-bottom:5px; font-size:0.76rem; color:#8090b0; }
+
+.sf-prow { display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.04); font-size:0.78rem; }
+.sf-prow:last-child{ border-bottom:none; }
+.sf-pk { color:#3a5070; } .sf-pv { font-weight:600; color:#b0bcd4; text-align:right; }
+
+.sf-warn { background:rgba(245,166,35,0.06); border:1px solid rgba(245,166,35,0.2); border-radius:8px; padding:10px 15px; font-size:0.78rem; color:#f5a623; margin-bottom:12px; }
+.sf-info { background:rgba(0,212,200,0.06); border:1px solid rgba(0,212,200,0.15); border-radius:8px; padding:10px 15px; font-size:0.78rem; color:#00d4c8; margin-bottom:12px; }
+
+.sf-ar { background:rgba(255,255,255,0.015); border:1px solid rgba(255,255,255,0.04); border-radius:5px; padding:5px 9px; margin-bottom:3px; font-family:'DM Mono',monospace; font-size:0.65rem; color:#3a5070; display:flex; gap:10px; flex-wrap:wrap; }
 
 .sf-statusbar {
-    position: fixed; bottom: 0; left: 0; right: 0;
-    background: #0a0e1a;
-    border-top: 1px solid rgba(255,255,255,0.07);
-    padding: 6px 24px;
-    font-size: 0.69rem; color: #4a5568;
-    display: flex; align-items: center; gap: 20px;
-    z-index: 999;
+    position:fixed; bottom:0; left:0; right:0;
+    background:rgba(4,7,16,0.97); border-top:1px solid rgba(255,255,255,0.05);
+    padding:5px 28px; font-size:0.64rem; color:#2d4060;
+    display:flex; align-items:center; gap:18px; z-index:999;
+    backdrop-filter:blur(12px);
 }
-.sf-statusbar span { display: flex; align-items: center; gap: 5px; }
-.sf-statusbar .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
-.sf-statusbar .green { background: #4ECDC4; }
-.sf-statusbar .yellow { background: #FFE66D; }
-.sf-statusbar .version { font-family: 'JetBrains Mono', monospace; margin-left: auto; }
+.sf-statusbar .dot { width:5px; height:5px; border-radius:50%; display:inline-block; margin-right:4px; }
+.sf-statusbar .g { background:#00d4c8; } .sf-statusbar .y { background:#f5c842; }
+.sf-statusbar .ver { font-family:'DM Mono',monospace; margin-left:auto; }
 
-@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-.fade-in { animation: fadeUp 0.4s ease; }
+.sf-divider { height:1px; background:linear-gradient(90deg,transparent,rgba(0,212,200,0.15),transparent); margin:20px 0; }
 
-.css-1d391kg, [data-testid="stAppViewContainer"] > section { padding-bottom: 48px !important; }
+@keyframes fadeUp { from{opacity:0;transform:translateY(6px);} to{opacity:1;transform:translateY(0);} }
+.fade-in { animation:fadeUp 0.35s ease; }
+
+/* tab content padding fix */
+.css-1d391kg,[data-testid="stAppViewContainer"]>section{ padding-bottom:36px!important; }
 </style>
 """
 
 # =============================================================================
-#  STREAMLIT UI
+#  UI HELPERS
 # =============================================================================
 def render_nav():
     st.markdown("""
     <div class="sf-nav">
-      <div class="sf-logo">
-        <div class="sf-logo-main">SkillForge</div>
-        <div class="sf-logo-sub">Skill Gap · Learning Pathways</div>
+      <div>
+        <div class="sf-brand">SkillForge</div>
+        <div class="sf-brand-sub">AI Adaptive Onboarding Engine · v6</div>
       </div>
-      <div class="sf-nav-right">
-        <span class="sf-pill active">Groq LLaMA 4-Scout</span>
-        <span class="sf-pill active">NetworkX Pathing</span>
-        <span class="sf-pill active">Semantic Match</span>
-        <span class="sf-pill active">Skill Decay</span>
-        <span class="sf-pill light-btn">☀ Light</span>
+      <div class="sf-tags">
+        <span class="sf-tag">⚡ Groq LLaMA 4-Scout</span>
+        <span class="sf-tag">◈ NetworkX DAG</span>
+        <span class="sf-tag">◉ Semantic Match</span>
+        <span class="sf-tag web">🌐 Web Search</span>
       </div>
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""", unsafe_allow_html=True)
 
-def render_hero():
-    st.markdown("""
-    <div class="sf-hero">
-      <h1>Map Your Path to <span>Role Mastery</span></h1>
-      <p>Upload your resume and the target job description — the AI identifies<br>
-         your exact skill gaps and builds a dependency-aware learning roadmap.</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-def render_status_bar():
-    total_cost = sum(e.get("cost",0) for e in _audit_log)
+def render_statusbar():
+    cost = sum(e.get("cost",0) for e in _audit_log)
     calls = len(_audit_log)
     st.markdown(f"""
     <div class="sf-statusbar">
-      <span><span class="dot green"></span> Groq llama-4-scout</span>
-      <span><span class="dot green"></span> NetworkX</span>
-      <span><span class="dot {'green' if SEMANTIC else 'yellow'}"></span>
-        Semantic Match {'✓' if SEMANTIC else '(loading)'}</span>
-      <span><span class="dot green"></span> Skill Decay</span>
-      <span class="version">v5.0.0  ·  {calls} calls  ·  ${total_cost:.5f}</span>
-    </div>
-    """, unsafe_allow_html=True)
+      <span><span class="dot g"></span>Groq</span>
+      <span><span class="dot g"></span>NetworkX</span>
+      <span><span class="dot {'g' if SEMANTIC else 'y'}"></span>Semantic{'✓' if SEMANTIC else ' …'}</span>
+      <span><span class="dot g"></span>DDG Search</span>
+      <span class="ver">v6 · {calls} calls · ${cost:.5f}</span>
+    </div>""", unsafe_allow_html=True)
 
+# =============================================================================
+#  MAIN UI
+# =============================================================================
 def main():
-    st.markdown(THEME_CSS, unsafe_allow_html=True)
+    st.markdown(CSS, unsafe_allow_html=True)
     render_nav()
-    render_hero()
 
-    # ── Sample buttons ─────────────────────────────────────────────────────────
-    # FIX: Write directly into session_state keys used by the text areas,
-    # then call st.rerun() so Streamlit picks them up before rendering.
-    st.markdown('<div class="sf-samples"><div class="sf-samples-label">Try a sample:</div></div>',
+    # ── Compact hero ──────────────────────────────────────────────────────────
+    st.markdown("""
+    <div class="sf-hero">
+      <div class="sf-hero-text">
+        <h1>Personalized Path to <em>Role Mastery</em></h1>
+        <p>Upload resume + JD → instant skill gap analysis, dependency-aware roadmap, live web intelligence.</p>
+      </div>
+      <div class="sf-hero-stats">
+        <div class="sf-stat"><div class="sf-stat-val">47</div><div class="sf-stat-lbl">Courses</div></div>
+        <div class="sf-stat"><div class="sf-stat-val">3</div><div class="sf-stat-lbl">Domains</div></div>
+        <div class="sf-stat"><div class="sf-stat-val">0</div><div class="sf-stat-lbl">Hallucinations</div></div>
+      </div>
+    </div>""", unsafe_allow_html=True)
+
+    # ── Sample chips — ONE CLICK = auto-analyze ───────────────────────────────
+    st.markdown('<div class="sf-chips"><span class="sf-chips-lbl">Try a demo:</span></div>',
                 unsafe_allow_html=True)
-    s1, s2, s3, _ = st.columns([1,1,1,3])
+    c1, c2, c3, _ = st.columns([1,1,1,5])
 
-    if s1.button("👨‍💻 Junior SWE", key="sp_jswe", use_container_width=True):
-        st.session_state["jd_paste"]  = SAMPLES["junior_swe"]["jd"]
-        st.session_state["res_paste"] = SAMPLES["junior_swe"]["resume"]
-        st.session_state.pop("result", None)
-        st.rerun()
+    with c1:
+        st.markdown('<div class="sample-chip">', unsafe_allow_html=True)
+        if st.button("👨‍💻 Junior SWE", key="sp_jswe", use_container_width=True):
+            st.session_state["jd_paste"]     = SAMPLES["junior_swe"]["jd"]
+            st.session_state["res_paste"]    = SAMPLES["junior_swe"]["resume"]
+            st.session_state["auto_analyze"] = True
+            st.session_state.pop("result", None)
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    if s2.button("🧪 Senior Data Scientist", key="sp_ds", use_container_width=True):
-        st.session_state["jd_paste"]  = SAMPLES["senior_ds"]["jd"]
-        st.session_state["res_paste"] = SAMPLES["senior_ds"]["resume"]
-        st.session_state.pop("result", None)
-        st.rerun()
+    with c2:
+        st.markdown('<div class="sample-chip">', unsafe_allow_html=True)
+        if st.button("🧪 Senior DS", key="sp_ds", use_container_width=True):
+            st.session_state["jd_paste"]     = SAMPLES["senior_ds"]["jd"]
+            st.session_state["res_paste"]    = SAMPLES["senior_ds"]["resume"]
+            st.session_state["auto_analyze"] = True
+            st.session_state.pop("result", None)
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    if s3.button("💼 HR Manager", key="sp_hr", use_container_width=True):
-        st.session_state["jd_paste"]  = SAMPLES["hr_manager"]["jd"]
-        st.session_state["res_paste"] = SAMPLES["hr_manager"]["resume"]
-        st.session_state.pop("result", None)
-        st.rerun()
+    with c3:
+        st.markdown('<div class="sample-chip">', unsafe_allow_html=True)
+        if st.button("💼 HR Manager", key="sp_hr", use_container_width=True):
+            st.session_state["jd_paste"]     = SAMPLES["hr_manager"]["jd"]
+            st.session_state["res_paste"]    = SAMPLES["hr_manager"]["resume"]
+            st.session_state["auto_analyze"] = True
+            st.session_state.pop("result", None)
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── Three-column input layout ──────────────────────────────────────────────
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-    col_res, col_jd, col_btn = st.columns([5, 5, 3], gap="medium")
+    # ── Always-visible input panel (3 columns, no expanders) ─────────────────
+    col_res, col_jd, col_act = st.columns([5, 5, 3], gap="small")
 
-    # Resume card
     with col_res:
-        st.markdown("""
-        <div style="background:#141c2e;border:1px solid rgba(255,255,255,0.07);
-                    border-radius:14px;padding:20px 20px 0;margin-bottom:-12px">
-          <div style="text-align:center;font-size:1.5rem;margin-bottom:6px">📄</div>
-          <div style="text-align:center;font-size:1rem;font-weight:700;color:#e6edf3;margin-bottom:14px">Resume</div>
-        </div>
-        """, unsafe_allow_html=True)
-        resume_file = st.file_uploader(
-            "Drop or browse",
-            type=["pdf","docx","jpg","jpeg","png","webp"],
-            key="res_file",
-            label_visibility="collapsed",
-        )
-        st.markdown("""
-        <div style="background:#141c2e;border:1px solid rgba(255,255,255,0.07);
-                    border-radius:0 0 14px 14px;padding:0 20px 18px">
-          <p style="font-size:0.7rem;color:#3d4f6b;text-align:center;margin:4px 0 0">PDF or DOCX</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown('<div class="sf-card"><div class="sf-card-hd"><span>📄</span> Resume</div>',
+                    unsafe_allow_html=True)
+        resume_file = st.file_uploader("resume_up", type=["pdf","docx","jpg","jpeg","png","webp"],
+                                       key="res_file", label_visibility="collapsed")
+        st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
+        res_paste = st.text_area("", height=110, placeholder="…or paste resume text here",
+                                 key="res_paste", label_visibility="collapsed")
+        st.markdown('<div style="font-size:0.62rem;color:#2d4060;text-align:center;padding-top:4px">PDF · DOCX · Image</div></div>',
+                    unsafe_allow_html=True)
 
-    # JD card
     with col_jd:
-        st.markdown("""
-        <div style="background:#141c2e;border:1px solid rgba(255,255,255,0.07);
-                    border-radius:14px;padding:20px 20px 0;margin-bottom:-12px">
-          <div style="text-align:center;font-size:1.5rem;margin-bottom:6px">💼</div>
-          <div style="text-align:center;font-size:1rem;font-weight:700;color:#e6edf3;margin-bottom:14px">Job Description</div>
-        </div>
-        """, unsafe_allow_html=True)
-        jd_file = st.file_uploader(
-            "Drop or browse",
-            type=["pdf","docx"],
-            key="jd_file",
-            label_visibility="collapsed",
-        )
-        st.markdown("""
-        <div style="background:#141c2e;border:1px solid rgba(255,255,255,0.07);
-                    padding:0 20px 4px">
-          <p style="font-size:0.7rem;color:#3d4f6b;text-align:center;margin:4px 0 2px">PDF, DOCX or paste below</p>
-        </div>
-        """, unsafe_allow_html=True)
-        # FIX: No value= param — session_state["jd_paste"] drives the content
-        jd_paste = st.text_area(
-            "JD paste",
-            height=90,
-            placeholder="…or paste the JD text here",
-            key="jd_paste",
-            label_visibility="collapsed",
-        )
-        st.markdown("""
-        <div style="background:#141c2e;border:1px solid rgba(255,255,255,0.07);
-                    border-radius:0 0 14px 14px;padding:6px 20px 14px">
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown('<div class="sf-card"><div class="sf-card-hd"><span>💼</span> Job Description</div>',
+                    unsafe_allow_html=True)
+        jd_file = st.file_uploader("jd_up", type=["pdf","docx"],
+                                   key="jd_file", label_visibility="collapsed")
+        st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
+        jd_paste = st.text_area("", height=110, placeholder="…or paste JD text here",
+                                key="jd_paste", label_visibility="collapsed")
+        st.markdown('<div style="font-size:0.62rem;color:#2d4060;text-align:center;padding-top:4px">PDF · DOCX · Paste</div></div>',
+                    unsafe_allow_html=True)
 
-    # Analyze card
-    with col_btn:
-        st.markdown("""
-        <div style="background:#141c2e;border:1px solid rgba(255,255,255,0.07);
-                    border-radius:14px;padding:24px 20px;text-align:center">
-          <div style="font-size:1.8rem;margin-bottom:8px">⚡</div>
-          <div style="font-size:1rem;font-weight:700;color:#e6edf3;margin-bottom:4px">Analyze</div>
-          <div style="font-size:0.73rem;color:#4a5568;margin-bottom:20px">AI-powered gap analysis</div>
-        </div>
-        """, unsafe_allow_html=True)
-        analyze_btn = st.button("Analyze →", key="analyze_main", use_container_width=True)
-
-        st.markdown("<div style='margin-top:12px'>", unsafe_allow_html=True)
+    with col_act:
+        st.markdown('<div class="sf-card"><div class="sf-card-hd"><span>⚡</span> Analyze</div>',
+                    unsafe_allow_html=True)
         hpd = st.select_slider("Pace (hrs/day)", options=[1,2,4,8], value=2, key="hpd")
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.caption(f"`{MODEL_FAST.split('/')[-1]}`")
+        st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+        analyze_btn = st.button("Analyze Skill Gap →", key="analyze_main", use_container_width=True)
+        st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
+        st.caption(f"🤖 `{MODEL_FAST.split('/')[-1][:20]}`")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # Resume paste expander
-    with st.expander("✏ Or paste resume text directly"):
-        # FIX: No value= param — session_state["res_paste"] drives the content
-        res_paste = st.text_area(
-            "Resume text",
-            height=120,
-            placeholder="Paste resume text here…",
-            key="res_paste",
-            label_visibility="collapsed",
-        )
+    st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
 
-    with st.expander("📊 Compare multiple JDs (optional)"):
-        jd2 = st.text_area("JD #2", height=80, placeholder="Paste second JD for comparison…", key="jd2")
-        jd3 = st.text_area("JD #3", height=80, placeholder="Paste third JD for comparison…", key="jd3")
+    # ── Fire analysis ─────────────────────────────────────────────────────────
+    # Triggers: manual button click OR auto_analyze flag from sample chips
+    should_run = analyze_btn or st.session_state.pop("auto_analyze", False)
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-    # ── Run analysis ───────────────────────────────────────────────────────────
-    if analyze_btn:
+    if should_run:
         res_text, res_img = "", None
         if resume_file:
             res_text, res_img = parse_uploaded_file(resume_file)
-        elif st.session_state.get("res_paste", "").strip():
+        elif st.session_state.get("res_paste","").strip():
             res_text = st.session_state["res_paste"].strip()
 
         jd_text = ""
         if jd_file:
             jd_text, _ = parse_uploaded_file(jd_file)
-        elif st.session_state.get("jd_paste", "").strip():
+        elif st.session_state.get("jd_paste","").strip():
             jd_text = st.session_state["jd_paste"].strip()
 
         if not res_text and not res_img:
-            st.error("Please upload or paste a resume."); return
-        if not jd_text:
-            st.error("Please upload or paste a job description."); return
+            st.error("⚠ Please upload or paste a resume first.")
+        elif not jd_text:
+            st.error("⚠ Please upload or paste a job description.")
+        else:
+            with st.spinner("⚡ Analyzing with Groq LLaMA 4-Scout…"):
+                result = run_analysis(res_text, jd_text, res_img)
 
-        with st.spinner("⚡ Calling Groq llama-4-scout…"):
-            result = run_analysis(res_text, jd_text, res_img)
+            if "error" in result:
+                if result.get("error") == "rate_limited":
+                    st.error(f"⚠ Rate limited: {result.get('message','')}")
+                else:
+                    st.error(f"Analysis error: {result.get('error','unknown')}")
+            else:
+                st.session_state["result"]     = result
+                st.session_state["resume_txt"] = res_text
 
-        if "error" in result:
-            if result.get("error") == "rate_limited":
-                st.error(f"⚠ Rate limited: {result.get('message','')}"); return
-            st.error(f"Analysis error: {result.get('error','unknown')}"); return
-
-        st.session_state["result"]     = result
-        st.session_state["resume_txt"] = res_text
-
-    # ── Render results ─────────────────────────────────────────────────────────
+    # ── Render results ────────────────────────────────────────────────────────
     res = st.session_state.get("result")
     if not res:
-        render_status_bar()
-        return
+        render_statusbar(); return
 
     c   = res["candidate"];   jd  = res["jd"]
     gp  = res["gap_profile"]; pt  = res["path"]
     im  = res["impact"];      sm  = res.get("seniority",{})
     ql  = res.get("quality",{}); iv = res.get("interview",{})
-    wp  = res.get("weekly_plan",[]); tf = res.get("transfers",[])
-    roi = res.get("roi",[]); obs = res.get("obsolescence",[])
-    cgm = res.get("career_months",0)
+    tf  = res.get("transfers",[]); roi = res.get("roi",[])
+    obs = res.get("obsolescence",[]); cgm = res.get("career_months",0)
     hpd_val = hpd
 
     st.markdown('<div class="fade-in">', unsafe_allow_html=True)
+    st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
 
     if res.get("_cache_hit"):
-        st.markdown('<div class="sf-info">⚡ <b>Cached result</b> — 0 API calls used</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sf-info" style="margin:0 28px 12px">⚡ <b>Cached result</b> — 0 API calls used</div>', unsafe_allow_html=True)
     if sm.get("has_mismatch"):
         st.markdown(
-            f'<div class="sf-warn">⚠ <b>Seniority Gap:</b> Candidate is {sm["candidate"]}, '
-            f'role requires {sm["required"]}. Leadership modules auto-added.</div>',
-            unsafe_allow_html=True,
-        )
+            f'<div class="sf-warn" style="margin:0 28px 12px">⚠ <b>Seniority Gap:</b> Candidate is {sm["candidate"]}, '
+            f'role requires {sm["required"]} — leadership modules auto-added.</div>',
+            unsafe_allow_html=True)
 
-    # KPI strip — 6 metrics
+    # KPI row
     k1,k2,k3,k4,k5,k6 = st.columns(6)
     k1.metric("Current Fit",   f"{im['current_fit']}%")
     k2.metric("Projected Fit", f"{im['projected_fit']}%", f"+{im['fit_delta']}%")
     k3.metric("Training Hrs",  f"{im['roadmap_hours']}h", f"saves ~{im['hours_saved']}h")
-    k4.metric("Modules",       im["modules_count"], f"{im['critical_count']} critical")
-    k5.metric("Interview",     f"{iv.get('score',0)}%", iv.get("label","--"))
+    k4.metric("Modules",       im["modules_count"],        f"{im['critical_count']} critical")
+    k5.metric("Interview",     f"{iv.get('score',0)}%",    iv.get("label","--"))
     k6.metric("Ready In",      weeks_ready(im["roadmap_hours"], hpd_val))
 
-    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
-
-    tabs = st.tabs(["🗺 Skill Gap","📚 Roadmap + ROI","🔬 ATS Audit","💰 Salary + Rewrite","📋 API Log"])
+    # Tabs
+    tabs = st.tabs(["🗺 Skill Gap", "📚 Roadmap + ROI", "🌐 Web Intel", "🔬 ATS Audit", "📄 Export", "📋 API Log"])
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 1 — SKILL GAP
     # ══════════════════════════════════════════════════════════════════════════
     with tabs[0]:
         l, r = st.columns([1.1, 1], gap="large")
-
         with l:
             st.markdown('<div class="sf-sec">Skill Gap Radar</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="sf-sec-sub">{c.get("name","Candidate")} vs {jd.get("role_title","Target Role")}</div>',
-                        unsafe_allow_html=True)
+            st.markdown(f'<div class="sf-sec-sub">{c.get("name","Candidate")} vs {jd.get("role_title","Target Role")}</div>', unsafe_allow_html=True)
             st.plotly_chart(radar_chart(gp), use_container_width=True, config={"displayModeBar":False})
-
         with r:
-            k_cnt = sum(1 for g in gp if g["status"]=="Known")
-            p_cnt = sum(1 for g in gp if g["status"]=="Partial")
-            m_cnt = sum(1 for g in gp if g["status"]=="Missing")
-            st.markdown('<div class="sf-sec">All Skills</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="sf-sec-sub">{k_cnt} Known &nbsp;·&nbsp; {p_cnt} Partial &nbsp;·&nbsp; {m_cnt} Missing</div>',
-                        unsafe_allow_html=True)
-            bars_html = ""
+            k_cnt=sum(1 for g in gp if g["status"]=="Known")
+            p_cnt=sum(1 for g in gp if g["status"]=="Partial")
+            m_cnt=sum(1 for g in gp if g["status"]=="Missing")
+            st.markdown(f'<div class="sf-sec">All Skills <span style="font-weight:400;font-size:0.72rem;color:#3a5070">— {k_cnt} Known · {p_cnt} Partial · {m_cnt} Missing</span></div>', unsafe_allow_html=True)
+            st.markdown('<div class="sf-sec-sub">⏱ = decayed proficiency &nbsp; ⚠ = obsolescence risk</div>', unsafe_allow_html=True)
+            html=""
             for g in gp:
-                col  = {"Known":"#4ECDC4","Partial":"#FFE66D","Missing":"#FF6B6B"}[g["status"]]
-                bc   = {"Known":"bk","Partial":"bp","Missing":"bm"}[g["status"]]
-                dmnd = {3:"🔥",2:"📈",1:"✓"}.get(g.get("demand",1),"✓")
-                dk   = " ⏱" if g.get("decayed") else ""
-                ob   = " ⚠" if g.get("obsolescence_risk") else ""
-                bars_html += f"""
-                <div class="sf-skill-row">
-                  <div class="sf-skill-name">{g['skill'][:16]}{dk}{ob}</div>
-                  <div class="sf-skill-track">
-                    <div class="sf-skill-fill" style="width:{g['proficiency']/10*100}%;background:{col}"></div>
-                  </div>
+                col={"Known":"#00d4c8","Partial":"#f5c842","Missing":"#f55142"}[g["status"]]
+                bc ={"Known":"bk","Partial":"bp","Missing":"bm"}[g["status"]]
+                dmnd={3:"🔥",2:"📈",1:"✓"}.get(g.get("demand",1),"✓")
+                html+=f"""<div class="sf-skill-row">
+                  <div class="sf-skill-name">{g['skill'][:16]}{"⏱" if g.get("decayed") else ""}{"⚠" if g.get("obsolescence_risk") else ""}</div>
+                  <div class="sf-skill-track"><div class="sf-skill-fill" style="width:{g['proficiency']/10*100}%;background:{col}"></div></div>
                   <div class="sf-skill-val">{g['proficiency']}/10 {dmnd}</div>
                   <span class="badge {bc}">{g['status']}</span>
                 </div>"""
-            st.markdown(f'<div style="max-height:340px;overflow-y:auto">{bars_html}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="max-height:320px;overflow-y:auto">{html}</div>', unsafe_allow_html=True)
 
-        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
         tc, oc, pc = st.columns(3, gap="medium")
-
         with tc:
-            st.markdown('<div class="sf-sec">↗ Transfer Map</div>', unsafe_allow_html=True)
-            st.markdown('<div class="sf-sec-sub">Your skills give a head start</div>', unsafe_allow_html=True)
-            if tf:
-                for t_item in tf[:5]:
-                    st.markdown(f'<div class="tf-item">↗ {t_item["label"]}</div>', unsafe_allow_html=True)
-            else:
-                st.caption("No strong transfer paths detected.")
-
+            st.markdown('<div class="sf-sec">↗ Transfer Map</div><div class="sf-sec-sub">Your existing skills give a head start</div>', unsafe_allow_html=True)
+            for t_item in (tf[:5] or []):
+                st.markdown(f'<div class="tf-item">↗ {t_item["label"]}</div>', unsafe_allow_html=True)
+            if not tf: st.caption("No strong transfer paths detected.")
         with oc:
-            st.markdown('<div class="sf-sec">⚠ Obsolescence Risks</div>', unsafe_allow_html=True)
-            st.markdown('<div class="sf-sec-sub">Skills losing value by 2027</div>', unsafe_allow_html=True)
-            if obs:
-                for o in obs:
-                    st.markdown(f'<div class="ob-item">⚠ <b>{o["skill"]}</b>: {o["reason"]}</div>', unsafe_allow_html=True)
-            else:
-                st.caption("No risks detected.")
-
+            st.markdown('<div class="sf-sec">⚠ Obsolescence Risks</div><div class="sf-sec-sub">Skills fading by 2027</div>', unsafe_allow_html=True)
+            for o in obs:
+                st.markdown(f'<div class="ob-item"><b>{o["skill"]}</b>: {o["reason"]}</div>', unsafe_allow_html=True)
+            if not obs: st.caption("No risks detected.")
         with pc:
-            st.markdown('<div class="sf-sec">👤 Candidate Profile</div>', unsafe_allow_html=True)
-            rows_html = ""
-            for k_lbl, v_val in [
-                ("Name",       c.get("name","--")),
-                ("Role",       c.get("current_role","--")),
-                ("Seniority",  c.get("seniority","--")),
-                ("Experience", f"{c.get('years_experience','--')} yrs"),
-                ("Education",  (c.get("education","--") or "")[:30]),
-                ("Domain",     c.get("domain","--")),
-            ]:
-                rows_html += f'<div class="sf-prow"><span class="sf-pk">{k_lbl}</span><span class="sf-pv">{v_val}</span></div>'
-            st.markdown(rows_html, unsafe_allow_html=True)
+            st.markdown('<div class="sf-sec">👤 Candidate Profile</div><div class="sf-sec-sub"> </div>', unsafe_allow_html=True)
+            prows=""
+            for k_l,v_v in [("Name",c.get("name","--")),("Role",c.get("current_role","--")),
+                              ("Seniority",c.get("seniority","--")),("Experience",f"{c.get('years_experience','--')} yrs"),
+                              ("Education",(c.get("education","--") or "")[:28]),("Domain",c.get("domain","--"))]:
+                prows+=f'<div class="sf-prow"><span class="sf-pk">{k_l}</span><span class="sf-pv">{v_v}</span></div>'
+            st.markdown(prows, unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 2 — ROADMAP + ROI
     # ══════════════════════════════════════════════════════════════════════════
     with tabs[1]:
         rl, rr = st.columns([1.1, 1], gap="large")
-        lc = {"Beginner":"#4ECDC4","Intermediate":"#FFE66D","Advanced":"#FF6B6B"}
-
+        lc={"Beginner":"#00d4c8","Intermediate":"#f5c842","Advanced":"#f5a623"}
         with rl:
-            st.markdown('<div class="sf-sec">Learning Roadmap</div>', unsafe_allow_html=True)
-            st.markdown('<div class="sf-sec-sub">Dependency-ordered · critical path highlighted · AI reasoning per module</div>',
-                        unsafe_allow_html=True)
-            for i, m in enumerate(pt):
-                crit  = m.get("is_critical",False)
-                level = m["level"]
-                cls   = "crit" if crit else ("adv" if level=="Advanced" else "int" if level=="Intermediate" else "")
-                flag  = " ★ CRITICAL" if crit else ""
-                prereqs_str = ", ".join(m.get("prereqs",[]) or []) or "None"
-                with st.expander(f"#{i+1}  {m['title']}  ·  {m['duration_hrs']}h{flag}"):
-                    st.markdown(f"""
-                    <div class="sf-mod {cls}">
+            st.markdown('<div class="sf-sec">Learning Roadmap</div><div class="sf-sec-sub">Dependency-ordered · critical path in red · AI reasoning per module</div>', unsafe_allow_html=True)
+            for i,m in enumerate(pt):
+                crit=m.get("is_critical",False); level=m["level"]
+                cls="crit" if crit else ("adv" if level=="Advanced" else "int" if level=="Intermediate" else "")
+                with st.expander(f"{'★ ' if crit else ''}#{i+1}  {m['title']}  ·  {m['duration_hrs']}h"):
+                    prereqs_str=", ".join(m.get("prereqs",[]) or []) or "None"
+                    st.markdown(f"""<div class="sf-mod {cls}">
                       <div class="sf-mod-title">
                         <span>{m['title']}</span>
-                        <span style="font-family:'JetBrains Mono',monospace;font-size:.68rem;color:{lc.get(level,'#888')}">{level} · {m['duration_hrs']}h</span>
+                        <span style="font-family:'DM Mono',monospace;font-size:.66rem;color:{lc.get(level,'#888')}">{level} · {m['duration_hrs']}h</span>
                       </div>
-                      <div class="sf-mod-meta">Skill: {m['skill']} &nbsp;·&nbsp; Domain: {m['domain']} &nbsp;·&nbsp; Gap: {m.get('gap_status','--')} &nbsp;·&nbsp; Prereqs: {prereqs_str}</div>
+                      <div class="sf-mod-meta">Skill: {m['skill']} · Domain: {m['domain']} · Gap: {m.get('gap_status','--')} · Prereqs: {prereqs_str}</div>
                       {f'<div class="sf-mod-reason">{m["reasoning"]}</div>' if m.get("reasoning") else ""}
-                    </div>
-                    """, unsafe_allow_html=True)
-
+                    </div>""", unsafe_allow_html=True)
         with rr:
-            st.markdown('<div class="sf-sec">ROI Ranking</div>', unsafe_allow_html=True)
-            st.markdown('<div class="sf-sec-sub">Highest return-on-time — tackle these first</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sf-sec">ROI Ranking</div><div class="sf-sec-sub">Red = required gap · teal = preferred</div>', unsafe_allow_html=True)
             st.plotly_chart(roi_chart(roi), use_container_width=True, config={"displayModeBar":False})
 
-        st.markdown("---")
-        st.markdown('<div class="sf-sec">Priority Matrix — Ease vs Impact</div>', unsafe_allow_html=True)
-        st.markdown('<div class="sf-sec-sub">Bubble size = course duration. Top-right = Quick Wins.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="sf-sec">Priority Matrix</div><div class="sf-sec-sub">Bubble size = course duration · Top-right = Quick Wins</div>', unsafe_allow_html=True)
         st.plotly_chart(priority_matrix(gp), use_container_width=True, config={"displayModeBar":False})
 
         st.markdown('<div class="sf-sec">Training Timeline</div>', unsafe_allow_html=True)
@@ -1399,176 +1262,246 @@ def main():
         for w in wp_curr[:8]:
             with st.expander(f"Week {w['week']} — {w['total_hrs']:.1f}h"):
                 for mx in w["modules"]:
-                    crit_t = "★ " if mx.get("is_critical") else ""
-                    st.markdown(f"- {crit_t}**{mx['title']}** ({mx['hrs_this_week']:.1f}h / {mx['total_hrs']}h total)")
+                    st.markdown(f"- {'★ ' if mx.get('is_critical') else ''}**{mx['title']}** ({mx['hrs_this_week']:.1f}h / {mx['total_hrs']}h)")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # TAB 3 — ATS AUDIT
+    # TAB 3 — WEB INTEL (NEW)
     # ══════════════════════════════════════════════════════════════════════════
     with tabs[2]:
-        ats   = ql.get("ats_score", 0)
-        cs_sc = ql.get("completeness_score", 0)
-        cl_sc = ql.get("clarity_score", 0)
-        grade = ql.get("overall_grade","--")
-        gc    = {"A":"#4ECDC4","B":"#FFE66D","C":"#FFA726","D":"#FF6B6B"}.get(grade,"#888")
+        st.markdown('<div class="sf-sec">🌐 Live Web Intelligence</div><div class="sf-sec-sub">Real-time data from the web via DuckDuckGo + Groq — not hallucinated estimates</div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
 
-        a1,a2,a3,a4 = st.columns(4)
+        wi1, wi2 = st.columns(2, gap="large")
+
+        # ── Salary lookup ──────────────────────────────────────────────────
+        with wi1:
+            st.markdown('<div class="sf-sec">💰 Live Salary Lookup</div>', unsafe_allow_html=True)
+            loc = st.selectbox("Location", ["India","USA","UK","Germany","Canada","Singapore","UAE"], index=0, key="sal_loc")
+            if st.button("🌐 Search Live Salary", key="sal_btn", use_container_width=True):
+                with st.spinner(f"Searching salary data for {jd.get('role_title','--')} in {loc}…"):
+                    sal = search_real_salary(jd.get("role_title","the role"), loc)
+                st.session_state["sal_result"] = sal
+
+            sal = st.session_state.get("sal_result")
+            if sal and sal.get("median_lpa",0):
+                st.plotly_chart(salary_chart(sal), use_container_width=True, config={"displayModeBar":False})
+                st.caption(f"Source: {sal.get('source','web')} · {sal.get('note','')}")
+            elif sal:
+                st.warning(f"Could not extract salary: {sal.get('note','—')}")
+
+        # ── Job market intel ───────────────────────────────────────────────
+        with wi2:
+            st.markdown('<div class="sf-sec">📈 Job Market Intelligence</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sf-sec-sub">Role: {jd.get("role_title","--")}</div>', unsafe_allow_html=True)
+            if st.button("🔍 Fetch Market Insights", key="mkt_btn", use_container_width=True):
+                with st.spinner("Searching job market trends…"):
+                    insights = search_job_market(jd.get("role_title","the role"))
+                st.session_state["mkt_insights"] = insights
+
+            for ins in st.session_state.get("mkt_insights",[]):
+                st.markdown(f'<div class="sf-insight">📌 {ins}</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
+
+        # ── Skill trend signals ────────────────────────────────────────────
+        st.markdown('<div class="sf-sec">🔥 Skill Market Signals</div><div class="sf-sec-sub">Web-searched demand signal per skill gap</div>', unsafe_allow_html=True)
+        if st.button("🌐 Check Skill Trends", key="trend_btn", use_container_width=True):
+            gap_skills=[g["skill"] for g in gp if g["status"]!="Known"][:8]
+            with st.spinner("Searching skill demand trends…"):
+                trends = search_skill_trends(gap_skills)
+            st.session_state["skill_trends"] = trends
+
+        trends = st.session_state.get("skill_trends",{})
+        if trends:
+            tcols = st.columns(4)
+            for i,(skill,signal) in enumerate(trends.items()):
+                color = "#f55142" if "Hot" in signal else "#f5c842" if "Growing" in signal else "#3a5070"
+                tcols[i%4].markdown(
+                    f'<div style="background:rgba(12,20,38,0.8);border:1px solid rgba(255,255,255,0.06);'
+                    f'border-radius:8px;padding:10px 12px;margin-bottom:8px;text-align:center">'
+                    f'<div style="font-size:0.78rem;font-weight:600;color:#e8f0ff">{skill}</div>'
+                    f'<div style="font-size:0.72rem;color:{color};margin-top:3px">{signal}</div>'
+                    f'</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
+
+        # ── Real course links ──────────────────────────────────────────────
+        st.markdown('<div class="sf-sec">📚 Find Real Courses Online</div><div class="sf-sec-sub">Live Coursera · Udemy · YouTube links for your skill gaps</div>', unsafe_allow_html=True)
+        gap_skills_all = [g["skill"] for g in gp if g["status"]!="Known"]
+        if gap_skills_all:
+            selected_skill = st.selectbox("Pick a skill gap to find courses for:",
+                                          gap_skills_all, key="course_skill_sel")
+            if st.button(f"🔍 Find courses for {selected_skill}", key="course_search_btn", use_container_width=True):
+                with st.spinner(f"Searching online courses for {selected_skill}…"):
+                    courses = search_course_links(selected_skill)
+                st.session_state[f"courses_{selected_skill}"] = courses
+
+            courses = st.session_state.get(f"courses_{selected_skill}", [])
+            if courses:
+                for crs in courses:
+                    st.markdown(
+                        f'<div class="sf-course-link">'
+                        f'{crs["icon"]} <a href="{crs["url"]}" target="_blank">{crs["title"]}</a>'
+                        f'<div class="sf-course-plat">{crs["platform"]} · {crs["snippet"]}</div>'
+                        f'</div>', unsafe_allow_html=True)
+            elif f"courses_{selected_skill}" in st.session_state:
+                st.warning("No courses found — try a different skill or check your connection.")
+        else:
+            st.success("🎉 No skill gaps detected! All required skills are Known.")
+
+        # ── Resume rewrite ─────────────────────────────────────────────────
+        st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="sf-sec">✍ AI Resume Rewrite</div><div class="sf-sec-sub">ATS-optimized for this JD — missing keywords injected naturally</div>', unsafe_allow_html=True)
+        rtxt = st.session_state.get("resume_txt","")
+        if not rtxt:
+            st.info("No resume text available (image-only uploads can't be rewritten).")
+        else:
+            if st.button("🔄 Rewrite Resume", key="rw_btn", use_container_width=True):
+                with st.spinner("Rewriting with llama-4-scout…"):
+                    rewritten = rewrite_resume(rtxt, jd, ql.get("missing_keywords",[]))
+                st.session_state["rw_result"] = rewritten
+            if st.session_state.get("rw_result"):
+                st.text_area("Rewritten Resume (ATS-optimized)", value=st.session_state["rw_result"],
+                             height=280, key="rw_display")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 4 — ATS AUDIT
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[3]:
+        ats=ql.get("ats_score",0); cs_sc=ql.get("completeness_score",0)
+        cl_sc=ql.get("clarity_score",0); grade=ql.get("overall_grade","--")
+
+        a1,a2,a3,a4=st.columns(4)
         a1.metric("ATS Score",    f"{ats}%")
         a2.metric("Grade",        grade)
         a3.metric("Completeness", f"{cs_sc}%")
         a4.metric("Clarity",      f"{cl_sc}%")
         st.progress(ats/100)
 
-        dl, dr = st.columns(2, gap="large")
+        dl,dr=st.columns(2,gap="large")
         with dl:
             st.markdown('<div class="sf-sec" style="margin-top:16px">✏ Improvement Tips</div>', unsafe_allow_html=True)
-            for i, tip in enumerate((ql.get("improvement_tips") or [])[:6]):
+            for i,tip in enumerate((ql.get("improvement_tips") or [])[:6]):
                 st.markdown(
-                    f'<div style="display:flex;gap:10px;margin-bottom:8px;font-size:.82rem;color:#8892a4;line-height:1.5">'
-                    f'<span style="font-family:JetBrains Mono,monospace;font-size:.68rem;color:#4ECDC4;background:rgba(78,205,196,.08);'
-                    f'border:1px solid rgba(78,205,196,.2);border-radius:4px;padding:2px 6px;min-width:28px;text-align:center;flex-shrink:0">0{i+1}</span>'
-                    f'<span>{tip}</span></div>',
-                    unsafe_allow_html=True,
-                )
+                    f'<div style="display:flex;gap:9px;margin-bottom:7px;font-size:.78rem;color:#8090b0;line-height:1.5">'
+                    f'<span style="font-family:DM Mono,monospace;font-size:.65rem;color:#00d4c8;background:rgba(0,212,200,.08);'
+                    f'border:1px solid rgba(0,212,200,.18);border-radius:4px;padding:2px 6px;min-width:26px;text-align:center;flex-shrink:0">0{i+1}</span>'
+                    f'<span>{tip}</span></div>', unsafe_allow_html=True)
             st.markdown('<div class="sf-sec" style="margin-top:16px">🗣 Interview Talking Points</div>', unsafe_allow_html=True)
             for p in (ql.get("interview_talking_points") or [])[:4]:
-                st.markdown(
-                    f'<div style="font-size:.82rem;color:#8892a4;margin-bottom:8px;padding-left:12px;'
-                    f'border-left:2px solid #4ECDC4;line-height:1.5">→ {p}</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f'<div style="font-size:.78rem;color:#8090b0;margin-bottom:7px;padding-left:11px;border-left:2px solid #00d4c8;line-height:1.5">→ {p}</div>', unsafe_allow_html=True)
+
         with dr:
             st.markdown('<div class="sf-sec" style="margin-top:16px">🔴 ATS Issues</div>', unsafe_allow_html=True)
             for iss in (ql.get("ats_issues") or ["No critical issues detected"])[:5]:
                 st.warning(iss)
+            st.markdown('<div class="sf-sec" style="margin-top:12px">Missing Keywords</div>', unsafe_allow_html=True)
+            kws=ql.get("missing_keywords") or ["None identified"]
+            tags="".join(f'<span style="font-size:.68rem;padding:3px 9px;border-radius:4px;background:rgba(245,81,66,.08);'
+                         f'color:#f55142;border:1px solid rgba(245,81,66,.18);margin:3px;display:inline-block;font-weight:600">{k}</span>' for k in kws)
+            st.markdown(f'<div style="margin-top:8px;line-height:2.2">{tags}</div>', unsafe_allow_html=True)
 
-            st.markdown('<div class="sf-sec" style="margin-top:12px">Missing JD Keywords</div>', unsafe_allow_html=True)
-            kws = ql.get("missing_keywords") or ["None identified"]
-            tags_html = "".join(
-                f'<span style="font-size:.72rem;padding:3px 10px;border-radius:4px;background:rgba(255,107,107,.08);'
-                f'color:#FF6B6B;border:1px solid rgba(255,107,107,.2);margin:3px;display:inline-block;font-weight:600">{k}</span>'
-                for k in kws
-            )
-            st.markdown(f'<div style="margin-top:8px;line-height:2">{tags_html}</div>', unsafe_allow_html=True)
-
-        st.markdown("---")
-        ir1, ir2, ir3 = st.columns(3)
+        st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
+        ir1,ir2,ir3=st.columns(3)
         ir1.metric("Interview Ready", f"{iv.get('score',0)}%", iv.get("label","--"))
         ir2.metric("Seniority Gap",   f"{sm.get('gap_levels',0)} level(s)")
         ir3.metric("Est. Career Time",f"~{cgm} months")
         st.markdown(
-            f'<div style="font-size:.82rem;color:#8892a4;margin-top:8px">'
+            f'<div style="font-size:.76rem;color:#8090b0;margin-top:7px">'
             f'✅ Required Known: <b>{iv.get("req_known",0)}</b> &nbsp;·&nbsp; '
             f'🟡 Partial: <b>{iv.get("req_partial",0)}</b> &nbsp;·&nbsp; '
             f'❌ Missing: <b>{iv.get("req_missing",0)}</b> &nbsp;·&nbsp; '
-            f'💡 {iv.get("advice","")}</div>',
-            unsafe_allow_html=True,
-        )
+            f'💡 {iv.get("advice","")}</div>', unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # TAB 4 — SALARY + REWRITE
+    # TAB 5 — EXPORT
     # ══════════════════════════════════════════════════════════════════════════
-    with tabs[3]:
-        sc, rw = st.columns(2, gap="large")
-
-        with sc:
-            st.markdown('<div class="sf-sec">💰 Live Salary Lookup</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="sf-sec-sub">Role: {jd.get("role_title","--")} · Groq web search tool</div>',
-                        unsafe_allow_html=True)
-            loc = st.selectbox("Location", ["India","USA","UK","Germany","Canada","Singapore"], index=0)
-            if st.button("🔍 Fetch Live Salary", key="sal_btn"):
-                with st.spinner("Searching market data via Groq…"):
-                    sal = fetch_live_salary(jd.get("role_title","the role"), loc)
-                if sal.get("median_lpa",0):
-                    st.plotly_chart(salary_chart(sal), use_container_width=True, config={"displayModeBar":False})
-                    st.caption(f"Source: {sal.get('source','market data')} · {sal.get('note','')}")
-                else:
-                    st.warning(f"Could not fetch: {sal.get('note','unavailable')}")
-
-        with rw:
-            st.markdown('<div class="sf-sec">✍ AI Resume Rewrite</div>', unsafe_allow_html=True)
-            st.markdown('<div class="sf-sec-sub">ATS-optimized rewrite targeting this JD + missing keywords</div>',
-                        unsafe_allow_html=True)
-            rtxt = st.session_state.get("resume_txt","")
-            if not rtxt:
-                st.info("No resume text available (image-only uploads can't be rewritten).")
-            else:
-                if st.button("🔄 Rewrite Resume", key="rw_btn"):
-                    with st.spinner("Rewriting with llama-4-scout…"):
-                        rewritten = rewrite_resume(rtxt, jd, ql.get("missing_keywords",[]))
-                    st.text_area("Rewritten Resume (ATS-optimized)", value=rewritten,
-                                 height=300, key="rw_result", label_visibility="visible")
-
-        # PDF Export
-        st.markdown("---")
-        st.markdown('<div class="sf-sec">📄 Download Report</div>', unsafe_allow_html=True)
-        ec1, ec2 = st.columns([1,2])
-        with ec1:
+    with tabs[4]:
+        ex1,ex2=st.columns(2,gap="large")
+        with ex1:
+            st.markdown('<div class="sf-sec">📄 PDF Report</div><div class="sf-sec-sub">Full roadmap with reasoning traces</div>', unsafe_allow_html=True)
+            st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
             for k,v in [("Candidate",c.get("name","--")),("Role",jd.get("role_title","--")),
                          ("ATS Score",f"{ql.get('ats_score','--')}%"),("Grade",ql.get("overall_grade","--")),
                          ("Current Fit",f"{im['current_fit']}%"),("Projected",f"{im['projected_fit']}% (+{im['fit_delta']}%)"),
-                         ("Modules",im["modules_count"]),("Training",f"{im['roadmap_hours']}h")]:
-                c1x, c2x = st.columns([1,2]); c1x.caption(k); c2x.markdown(f"**{v}**")
-        with ec2:
+                         ("Modules",im["modules_count"]),("Training Hrs",f"{im['roadmap_hours']}h")]:
+                c1x,c2x=st.columns([1,2]); c1x.caption(k); c2x.markdown(f"**{v}**")
             if REPORTLAB:
-                pdf_buf = build_pdf(c, jd, gp, pt, im, ql, iv)
-                nm = (c.get("name","candidate") or "candidate").replace(" ","_")
-                fn = f"skillforge_v5_{nm}_{datetime.now().strftime('%Y%m%d')}.pdf"
-                st.download_button("⬇ Download PDF Report", data=pdf_buf, file_name=fn,
-                                    mime="application/pdf", use_container_width=True)
+                pdf_buf=build_pdf(c,jd,gp,pt,im,ql,iv)
+                nm=(c.get("name","candidate") or "candidate").replace(" ","_")
+                st.download_button("⬇ Download PDF Report",data=pdf_buf,
+                                    file_name=f"skillforge_v6_{nm}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                                    mime="application/pdf",use_container_width=True)
             else:
                 st.warning("`pip install reportlab` to enable PDF export")
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # TAB 5 — API LOG
-    # ══════════════════════════════════════════════════════════════════════════
-    with tabs[4]:
-        total_cost = sum(e.get("cost",0) for e in _audit_log)
-        st.markdown('<div class="sf-sec">🔍 Groq API Audit Log</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="sf-sec-sub">{len(_audit_log)} calls · ${total_cost:.5f} total · key: .env only</div>',
-                    unsafe_allow_html=True)
+        with ex2:
+            st.markdown('<div class="sf-sec">📊 JSON Export</div><div class="sf-sec-sub">Full structured result for downstream tools</div>', unsafe_allow_html=True)
+            st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+            export_data = {
+                "candidate": c, "jd": jd,
+                "impact": im, "interview": iv,
+                "gap_profile": [{k:v for k,v in g.items() if k!="catalog_course"} for g in gp],
+                "roadmap": [{"id":m["id"],"title":m["title"],"skill":m["skill"],"level":m["level"],
+                             "duration_hrs":m["duration_hrs"],"is_critical":m.get("is_critical",False),
+                             "reasoning":m.get("reasoning","")} for m in pt],
+                "generated_at": datetime.now().isoformat(),
+            }
+            json_str = json.dumps(export_data, indent=2, default=str)
+            st.download_button("⬇ Download JSON", data=json_str,
+                                file_name=f"skillforge_v6_{datetime.now().strftime('%Y%m%d')}.json",
+                                mime="application/json", use_container_width=True)
+            st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+            # CSV of gap profile
+            csv_rows=["Skill,Status,Proficiency,Required,Demand"]
+            for g in gp:
+                csv_rows.append(f'"{g["skill"]}",{g["status"]},{g["proficiency"]},{g["is_required"]},{g.get("demand",1)}')
+            st.download_button("⬇ Download Gap CSV", data="\n".join(csv_rows),
+                                file_name=f"skillforge_gap_{datetime.now().strftime('%Y%m%d')}.csv",
+                                mime="text/csv", use_container_width=True)
 
-        b1, b2 = st.columns(2)
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 6 — API LOG
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[5]:
+        total_cost=sum(e.get("cost",0) for e in _audit_log)
+        st.markdown(f'<div class="sf-sec">🔍 Groq API Audit Log</div>'
+                    f'<div class="sf-sec-sub">{len(_audit_log)} calls · ${total_cost:.5f} total · key: .env only · never exposed</div>',
+                    unsafe_allow_html=True)
+        b1,b2=st.columns(2)
         with b1:
-            used  = sum(e.get("in",0)+e.get("out",0) for e in _audit_log)
-            limit = 500_000
-            pct   = min(100, round(used/limit*100))
-            st.caption(f"**llama-4-scout:** {used:,} / {limit:,} tokens ({pct}%)")
+            used=sum(e.get("in",0)+e.get("out",0) for e in _audit_log)
+            pct=min(100,round(used/500000*100))
+            st.caption(f"**Tokens used:** {used:,} / 500,000 ({pct}%)")
             st.progress(pct/100)
         with b2:
             st.caption(f"**Session cost:** ${total_cost:.5f}")
-            st.caption(f"**Model:** {MODEL_FAST.split('/')[-1]}")
-
-        st.markdown("---")
-        for e in reversed(_audit_log[-25:]):
-            ok = e.get("status") == "ok"
+            st.caption(f"**Model:** `{MODEL_FAST.split('/')[-1]}`")
+        st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+        for e in reversed(_audit_log[-30:]):
+            ok=e.get("status")=="ok"
             st.markdown(
                 f'<div class="sf-ar">'
-                f'<span style="color:{"#4ECDC4" if ok else "#FF6B6B"}">{"●" if ok else "✕"}</span>'
-                f'<span style="color:#a78bfa">{e.get("ts","--")}</span>'
-                f'<span style="color:#4ECDC4">{e.get("model","--")}</span>'
+                f'<span style="color:{"#00d4c8" if ok else "#f55142"}">{"●" if ok else "✕"}</span>'
+                f'<span style="color:#7b9fd4">{e.get("ts","--")}</span>'
+                f'<span style="color:#00d4c8">{e.get("model","--")}</span>'
                 f'<span>in:{e.get("in",0)} out:{e.get("out",0)} cached:{e.get("cached",0)}</span>'
                 f'<span>{e.get("ms",0)}ms</span>'
                 f'<span>${e.get("cost",0):.6f}</span>'
-                f'<span style="color:{"#4ECDC4" if ok else "#FF6B6B"}">{e.get("status","--")}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+                f'<span style="color:{"#00d4c8" if ok else "#f55142"}">{e.get("status","--")}</span>'
+                f'</div>', unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
-    render_status_bar()
+    render_statusbar()
 
 # =============================================================================
-#  CLI MODE  (python main.py --analyze junior_swe)
+#  CLI MODE
 # =============================================================================
-def cli_analyze(scenario_key: str):
-    if scenario_key not in SAMPLES:
-        print(f"Unknown scenario '{scenario_key}'. Choose: {list(SAMPLES.keys())}"); sys.exit(1)
-    s = SAMPLES[scenario_key]
-    print(f"\n  SkillForge v5 CLI  ·  {s['label']}")
-    print("  " + "="*52)
-    t0 = time.time()
-    result = run_analysis(s["resume"], s["jd"])
+def cli_analyze(scenario_key):
+    if scenario_key not in SAMPLES: print(f"Unknown: {list(SAMPLES.keys())}"); sys.exit(1)
+    s=SAMPLES[scenario_key]
+    print(f"\n  SkillForge v6 CLI  ·  {s['label']}\n  {'='*52}")
+    t0=time.time(); result=run_analysis(s["resume"],s["jd"])
     print(f"  Done in {round(time.time()-t0,2)}s")
     if "error" in result: print(f"  ❌ {result}"); return
     c=result["candidate"]; im=result["impact"]; iv=result["interview"]; pt=result["path"]
@@ -1578,21 +1511,17 @@ def cli_analyze(scenario_key: str):
     print(f"  Interview : {iv['score']}% ({iv['label']})")
     print(f"  Roadmap   : {im['modules_count']} modules / {im['roadmap_hours']}h / {im['critical_count']} critical")
     for i,m in enumerate(pt):
-        crit = "★ " if m.get("is_critical") else "  "
-        print(f"    {crit}#{i+1:02d} [{m['level'][:3]}] {m['title']}  ({m['duration_hrs']}h)")
-    print(f"\n  Hours saved vs generic 60h onboarding: ~{im['hours_saved']}h\n")
+        print(f"    {'★ ' if m.get('is_critical') else '  '}#{i+1:02d} [{m['level'][:3]}] {m['title']} ({m['duration_hrs']}h)")
+    print(f"\n  Hours saved vs generic 60h: ~{im['hours_saved']}h\n")
 
 # =============================================================================
 #  ENTRY POINT
 # =============================================================================
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="SkillForge v5")
-    parser.add_argument("--analyze", metavar="SCENARIO",
-                        help="CLI mode: junior_swe | senior_ds | hr_manager")
-    args, _ = parser.parse_known_args()
-
-    if args.analyze:
-        cli_analyze(args.analyze)
+    parser=argparse.ArgumentParser(description="SkillForge v6")
+    parser.add_argument("--analyze",metavar="SCENARIO",help="junior_swe | senior_ds | hr_manager")
+    args,_=parser.parse_known_args()
+    if args.analyze: cli_analyze(args.analyze)
     else:
-        threading.Thread(target=_load_semantic_bg, daemon=True).start()
+        threading.Thread(target=_load_semantic_bg,daemon=True).start()
         main()
