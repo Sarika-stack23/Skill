@@ -954,8 +954,6 @@ def render_tab_research(res: dict) -> None:
     role_name    = jd.get("role_title", "") or ""
     gap_skills_s = [g["skill"] for g in gp if g["status"] != "Known"][:4]
     shortcuts    = [(s, f"{s} online course tutorial 2025") for s in gap_skills_s]
-    shortcuts.append((f"{role_name[:18]} salary",
-                      f"{role_name} salary {st.session_state.get('sal_location', 'India')} 2025"))
 
     if shortcuts:
         sc_cols = st.columns(len(shortcuts))
