@@ -279,13 +279,6 @@ python main.py --analyze hr_manager
 
 ---
 
-## Built By
-
-**Sarika Jivrajika**  
-B.Tech Computer Science Engineering — Jain University, Bengaluru (2027)  
-GenAI Developer Intern @ HiDevs · GitHub: [@Sarika-stack23](https://github.com/Sarika-stack23)
-
----
 
 *Built with Groq · NetworkX · Streamlit · sentence-transformers · DuckDuckGo*  
 *ARTPARK CodeForge Hackathon 2025*
