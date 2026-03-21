@@ -1,6 +1,5 @@
 # SkillForge ⚡ — AI Adaptive Onboarding Engine
 
-> **ARTPARK CodeForge Hackathon 2026**
 > Intelligent skill-gap analysis and personalized learning pathway generation — powered by Groq LLaMA 3.3, NetworkX DAG, sentence-transformers, and a custom adaptive algorithm.
 
 ## 🚀 Live Demo
@@ -11,15 +10,13 @@ No setup needed. Click any demo scenario on the landing page for instant results
 
 ---
 
----
-
 ## The Problem
 
 Corporate onboarding is broken. Everyone gets the same 60-hour curriculum regardless of what they already know. Experienced hires waste time on concepts they mastered years ago. Beginners get overwhelmed by advanced modules out of sequence. Nobody wins.
 
 ## The Solution
 
-Upload a **resume** + **job description** — or take the **🧪 Diagnostic Quiz** (no file needed). SkillForge:
+Upload a **resume** + **job description**. SkillForge:
 
 1. Extracts every skill with proficiency score (0–10) and year last used
 2. Applies a **skill decay model** — skills unused 2+ years have proficiency reduced
@@ -28,17 +25,6 @@ Upload a **resume** + **job description** — or take the **🧪 Diagnostic Quiz
 5. Detects the **critical path** using node-weighted dynamic programming
 6. Scores **interview readiness** based on actual required skill coverage
 7. Audits the resume for **ATS compliance** and rewrites it — without fabricating experience
-
----
-
-## Two Input Modes
-
-| Mode | How it works |
-|---|---|
-| **Resume + JD** | Upload PDF/DOCX/image or paste text — Groq LLM extracts all skills |
-| **🧪 Diagnostic Quiz** | Rate yourself on 10 skills via sliders — no file upload needed |
-
-The diagnostic quiz is the third tab on the input page. It produces the same gap profile and roadmap as the resume parser — from self-assessed proficiency scores instead of LLM extraction.
 
 ---
 
@@ -55,12 +41,12 @@ The diagnostic quiz is the third tab on the input page. It produces the same gap
 ## Architecture
 
 ```
-Resume (PDF / DOCX / Image) + JD   OR   Diagnostic Quiz
+Resume (PDF / DOCX / Image) + Job Description
               │
               ▼
      ┌─────────────────┐
      │   File Parser   │  pdfplumber · python-docx · base64 image
-     │   OR Quiz Input │  scanned-PDF → PyMuPDF rasterise → vision OCR
+     │                 │  scanned-PDF → PyMuPDF rasterise → vision OCR
      └────────┬────────┘
               │
               ▼
@@ -137,7 +123,6 @@ The adaptive path generator walks this graph using `nx.ancestors()` to pull all 
 | **Charts** | Plotly >=5.20 (animated radar, ROI bar, timeline, salary) |
 | **PDF Export** | reportlab |
 | **Calendar Export** | ICS/iCal — one session/day, 7 PM, weekdays only |
-| **Web Search** | ddgs (DuckDuckGo) |
 
 ---
 
@@ -158,7 +143,7 @@ The adaptive path generator walks this graph using `nx.ancestors()` to pull all 
 
 ```
 SkillForge/
-├── main.py          <- Streamlit UI — all tabs, quiz, rendering, state
+├── main.py          <- Streamlit UI — all tabs, rendering, state management
 ├── backend.py       <- Core logic: AI pipeline, DAG, analysis, charts
 ├── dag.png          <- NetworkX DAG visualization (47-course graph)
 ├── .env             <- GROQ_API_KEY=gsk_... (never committed)
@@ -172,6 +157,10 @@ SkillForge/
 
 ## Setup
 
+### Prerequisites
+- Python 3.9+
+- Free Groq API key → [console.groq.com](https://console.groq.com)
+
 ```bash
 git clone https://github.com/Sarika-stack23/Skill.git
 cd Skill
@@ -180,7 +169,10 @@ echo "GROQ_API_KEY=gsk_your_key_here" > .env
 streamlit run main.py
 ```
 
-Docker:
+Opens at **http://localhost:8501**
+
+### Docker
+
 ```bash
 docker build -t skillforge .
 docker run -p 8501:8501 -e GROQ_API_KEY=gsk_your_key_here skillforge
@@ -188,19 +180,27 @@ docker run -p 8501:8501 -e GROQ_API_KEY=gsk_your_key_here skillforge
 
 ---
 
-## Evaluation Criteria Coverage
+## Requirements
 
-| Criterion | Weight | How Covered |
-|---|---|---|
-| **Technical Sophistication** | 20% | NetworkX DAG · skill decay · DP critical path · vision OCR · 60+ regex · diagnostic quiz |
-| **Communication & Docs** | 20% | README + DAG image · 5-slide deck · demo video · inline comments |
-| **User Experience** | 15% | Animated radar · interview prep · one-click demos · diagnostic quiz · urgency hierarchy |
-| **Grounding & Reliability** | 15% | Catalog-only · anti-hallucination rewrite · zero fabrication |
-| **Reasoning Trace** | 10% | Dedicated Groq call per module · 2-sentence reasoning · visible in UI + exports |
-| **Product Impact** | 10% | Fit delta · hours saved · interview readiness · peer percentile · ATS · salary outcome |
-| **Cross-Domain Scalability** | 10% | Tech + Non-Tech + Soft · 3 demos · seniority injection · quiz works all domains |
+```
+streamlit>=1.35.0
+groq>=0.9.0
+pdfplumber>=0.10.0
+python-docx>=1.1.0
+python-dotenv>=1.0.0
+plotly>=5.20.0
+networkx>=3.3
+reportlab>=4.0.0
+sentence-transformers>=2.7.0
+scikit-learn>=1.4.0
+numpy>=1.26.0
+ddgs>=9.0.0
+```
+
+Optional (for scanned PDF support):
+```
+PyMuPDF>=1.23.0
+Pillow>=10.0.0
+```
 
 ---
-
-*Built with Groq · NetworkX · Streamlit · sentence-transformers · DuckDuckGo*
-*ARTPARK CodeForge Hackathon 2026 — v14*
