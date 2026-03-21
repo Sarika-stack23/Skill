@@ -1,6 +1,6 @@
 # SkillForge ⚡ — AI Adaptive Onboarding Engine
 
-> **ARTPARK CodeForge Hackathon 2025**
+> **ARTPARK CodeForge Hackathon 2026**
 > Intelligent skill-gap analysis and personalized learning pathway generation — powered by Groq LLaMA 3.3, NetworkX DAG, sentence-transformers, and a custom adaptive algorithm.
 
 ## 🚀 Live Demo
@@ -203,4 +203,4 @@ docker run -p 8501:8501 -e GROQ_API_KEY=gsk_your_key_here skillforge
 ---
 
 *Built with Groq · NetworkX · Streamlit · sentence-transformers · DuckDuckGo*
-*ARTPARK CodeForge Hackathon 2025 — v14*
+*ARTPARK CodeForge Hackathon 2026 — v14*
