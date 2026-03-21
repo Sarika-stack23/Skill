@@ -53,7 +53,10 @@ def ddg_search(query: str, max_results: int = 5) -> List[dict]:
     try:
         from duckduckgo_search import DDGS
         with DDGS() as ddgs:
-            return list(ddgs.text(query, max_results=max_results))
+            results = list(ddgs.text(query, max_results=max_results*2, region="wt-wt"))
+            blocked = ["zhihu.com", "baidu.com", "weibo.com", "163.com", "csdn.net"]
+            results = [r for r in results if not any(b in r.get("href","") for b in blocked)][:max_results]
+            return results
     except ImportError:
         _DDG_ERROR = "duckduckgo-search not installed — run `pip install duckduckgo-search`"
         return []

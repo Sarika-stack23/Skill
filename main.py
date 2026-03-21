@@ -368,6 +368,7 @@ def render_input() -> None:
                     new_hash = hashlib.md5(raw_bytes).hexdigest()
                     if new_hash != st.session_state.get("_resume_hash", ""):
                         txt, img = _parse_bytes(raw_bytes, rf.name)
+                        cache_bust(txt, img, st.session_state.get("jd_text", ""))
                         for k in list(st.session_state.keys()):
                             if k not in ("sal_location", "force_fresh", "hpd"):
                                 st.session_state.pop(k, None)
@@ -744,7 +745,7 @@ def render_tab_overview(res: dict) -> None:
                 )
 
     with col_radar:
-        st.plotly_chart(radar_chart(gp), use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(radar_chart(gp), use_container_width=True, config={"displayModeBar": False}, key="radar_overview")
         tf = res.get("transfers", [])
         if tf:
             st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin:14px 0 8px">Transfer advantages</div>', unsafe_allow_html=True)
@@ -763,7 +764,7 @@ def render_tab_overview(res: dict) -> None:
                 f'<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin:16px 0 4px">'
                 f'Live salary — {res["jd"].get("role_title", "")[:24]}</div>', unsafe_allow_html=True,
             )
-            st.plotly_chart(salary_chart(sal), use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(salary_chart(sal), use_container_width=True, config={"displayModeBar": False}, key="salary_overview")
             st.caption(f"Source: {sal.get('source', 'web')} · {sal.get('note', '')}")
 
 # =============================================================================
@@ -879,12 +880,12 @@ def render_tab_roadmap(res: dict) -> None:
     with chart_col:
         st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin-bottom:8px">ROI ranking</div>', unsafe_allow_html=True)
         # FIX: no redundant re-import — roi_bar already imported at top
-        st.plotly_chart(roi_bar(res.get("roi", [])), use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(roi_bar(res.get("roi", [])), use_container_width=True, config={"displayModeBar": False}, key="roi_roadmap")
 
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin-bottom:10px">Training timeline</div>', unsafe_allow_html=True)
     # FIX: no redundant re-import — timeline_chart already imported at top
-    st.plotly_chart(timeline_chart(path), use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(timeline_chart(path), use_container_width=True, config={"displayModeBar": False}, key="timeline_roadmap")
 
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin-bottom:10px">Weekly study plan</div>', unsafe_allow_html=True)
@@ -1000,7 +1001,7 @@ def render_tab_research(res: dict) -> None:
         except (TypeError, ValueError):
             sal_med = 0.0
         if sal and sal_med > 0:
-            st.plotly_chart(salary_chart(sal), use_container_width=True, config={"displayModeBar": False})
+            st.plotly_chart(salary_chart(sal), use_container_width=True, config={"displayModeBar": False}, key="salary_research")
             st.caption(f"Source: {sal.get('source', 'web')} · {sal.get('note', '')}")
         else:
             st.markdown('<p style="font-family:var(--mono);font-size:0.75rem;color:var(--t3)">Salary data not available</p>', unsafe_allow_html=True)
@@ -1008,10 +1009,11 @@ def render_tab_research(res: dict) -> None:
             if st.button("🔍 Fetch salary data", key="sal_fetch", use_container_width=True):
                 with st.spinner("Searching…"):
                     _sal_new = search_real_salary(role_name, loc2)
+                if _sal_new:
                     st.session_state["result"]["salary"] = _sal_new
-                if not _sal_new:
+                    st.rerun()
+                else:
                     st.warning("Could not find salary data.")
-                st.rerun()
     with mkt_col:
         st.markdown('<div style="font-size:0.9rem;font-weight:600;color:var(--t1);margin-bottom:10px">Job market insights</div>', unsafe_allow_html=True)
         if mkt:
@@ -1377,6 +1379,12 @@ def render_results() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     render_topbar()
     st.markdown('<div class="sf-page">', unsafe_allow_html=True)
+    _, rc = st.columns([12, 1])
+    with rc:
+        st.markdown('<div class="sf-ghost">', unsafe_allow_html=True)
+        if st.button("↩ Reset", key="top_reset"):
+            _full_reset()
+        st.markdown('</div>', unsafe_allow_html=True)
     render_banner(res)
 
     # FIX: corrected tab order — Gap Analysis first (v11 change)
@@ -1406,42 +1414,7 @@ def render_results() -> None:
         f'</div>',
         unsafe_allow_html=True,
     )
-
-    # Sidebar — API log moved here
-    with st.sidebar:
-        st.markdown("### SkillForge")
-        st.markdown('<div class="sf-ghost">', unsafe_allow_html=True)
-        if st.button("← New Analysis", use_container_width=True, key="sb_new"):
-            _full_reset()
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("---")
-        c = res["candidate"]
-        st.markdown("**Candidate**")
-        st.markdown(f"`{c.get('name', '–')}` · {c.get('seniority', '–')} · {c.get('domain', '–')}")
-        st.markdown("**Role**")
-        st.markdown(f"`{res['jd'].get('role_title', '–')}`")
-        st.markdown("---")
-        im = res["impact"]
-        st.metric("Fit delta",   f"+{im['fit_delta']}%")
-        st.metric("Hours saved", f"~{im['hours_saved']}h")
-        st.metric("Modules",     im.get("modules_count", 0))
-        # FIX: display live _audit_log from module reference
-        if _bk._audit_log:
-            st.markdown("---")
-            st.markdown("**API log**")
-            for e in _bk._audit_log[-5:]:
-                ok = e.get("status") == "ok"
-                sc = "#4ade80" if ok else "#ef4444"
-                st.markdown(
-                    f'<div class="sf-log">'
-                    f'<span style="color:{sc}">{"●" if ok else "✕"}</span>'
-                    f'<span>{e.get("ts", "")}</span>'
-                    f'<span style="color:var(--teal)">{e.get("model", "")}</span>'
-                    f'<span>{e.get("in", 0)}+{e.get("out", 0)}tok</span>'
-                    f'<span>{e.get("ms", 0)}ms</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+    render_sidebar(res)
 
 # =============================================================================
 #  MAIN
