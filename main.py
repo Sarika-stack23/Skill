@@ -14,11 +14,12 @@
 #  - Topbar: removed NetworkX DAG chip
 # =============================================================================
 
-import os, json, urllib.parse, threading, hashlib, shelve, io, pathlib
+import os, json, urllib.parse, threading, hashlib
 from typing import Dict, Any, List
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
+import streamlit.components.v1 as _components
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -317,14 +318,14 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-metric-strip {
   display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-top:16px;
 }
-.sf-metric-card { background:var(--s2); border:1px solid var(--border); border-radius:10px; padding:16px 18px; text-align:center; }
+.sf-metric-card { background:var(--s2); border:1px solid var(--border); border-radius:10px; padding:16px 18px; text-align:center; min-height:100px; }
 .sf-metric-n    { font-family:var(--mono); font-size:1.6rem; font-weight:500; line-height:1; margin-bottom:5px; }
 .sf-metric-l    { font-family:var(--mono); font-size:0.6rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--t3); }
-.sf-metric-sub  { font-size:0.72rem; color:var(--t2); margin-top:4px; }
+.sf-metric-sub  { font-size:0.72rem; color:var(--t2); margin-top:4px; min-height:2.4em; overflow:hidden; }
 
 .sf-ground-badge { display:flex; align-items:center; gap:10px; margin-top:14px; padding:10px 16px; background:rgba(45,212,191,0.04); border:1px solid var(--bhi); border-radius:7px; font-family:var(--mono); font-size:0.68rem; color:var(--teal); }
 .sf-ground-dot   { width:7px; height:7px; border-radius:50%; background:var(--teal); flex-shrink:0; animation:pulse 2s infinite; }
-.sf-seniority-pill { display:inline-flex; align-items:center; gap:8px; padding:6px 14px; border-radius:6px; background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.18); font-family:var(--mono); font-size:0.72rem; color:var(--amber); margin-bottom:8px; }
+.sf-seniority-pill { display:inline-flex; align-items:center; gap:8px; padding:6px 14px; border-radius:6px; background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.18); font-family:var(--mono); font-size:0.72rem; color:var(--amber); margin-bottom:14px; }
 
 /* ── TOP 3 PRIORITIES BLOCK ── */
 .sf-priorities {
@@ -343,12 +344,12 @@ textarea::placeholder { color:var(--t4)!important; }
 }
 .sf-priority-card {
   background:rgba(239,68,68,0.04); border:1px solid rgba(239,68,68,0.15);
-  border-radius:9px; padding:14px 16px;
+  border-radius:9px; padding:14px 16px 16px;
 }
 .sf-priority-rank { font-family:var(--mono); font-size:0.6rem; color:var(--red); margin-bottom:6px; }
 .sf-priority-skill { font-size:0.95rem; font-weight:700; color:var(--t1); margin-bottom:4px; }
 .sf-priority-meta  { font-family:var(--mono); font-size:0.68rem; color:var(--t3); }
-.sf-priority-bar   { height:4px; background:rgba(255,255,255,0.05); border-radius:99px; margin-top:10px; }
+.sf-priority-bar   { height:4px; background:rgba(255,255,255,0.05); border-radius:99px; margin-top:12px; margin-bottom:2px; }
 .sf-priority-bar-fill { height:100%; border-radius:99px; background:var(--red); }
 
 /* ── SKILL CARDS with visual hierarchy ── */
@@ -432,15 +433,15 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-biz-item { flex:1; text-align:center; }
 .sf-biz-val  { font-family:var(--mono); font-size:1.4rem; font-weight:500; color:var(--t1); line-height:1; }
 .sf-biz-lbl  { font-family:var(--mono); font-size:0.6rem; color:var(--t3); margin-top:4px; }
-.sf-biz-div  { color:var(--t4); padding:0 16px; font-size:1.2rem; }
+.sf-biz-div  { color:var(--t4); padding:0 16px; font-size:1.2rem; flex-shrink:0; }
 
 /* ── ATS PANEL ── */
 .sf-ats-row  { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px; }
 .sf-ats-card { background:var(--s1); border:1px solid var(--border); border-radius:9px; padding:18px 16px; text-align:center; }
 .sf-ats-n    { font-family:var(--mono); font-size:1.8rem; font-weight:500; color:var(--t1); line-height:1; }
 .sf-ats-l    { font-family:var(--mono); font-size:0.62rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--t3); margin-top:5px; }
-.sf-prog      { height:3px; background:rgba(255,255,255,0.05); border-radius:99px; overflow:hidden; margin-bottom:20px; }
-.sf-prog-fill { height:100%; border-radius:99px; background:var(--teal); }
+.sf-prog      { height:6px; background:rgba(255,255,255,0.05); border-radius:99px; overflow:hidden; margin-bottom:20px; }
+.sf-prog-fill { height:100%; border-radius:99px; }
 .sf-tip   { display:flex; gap:12px; margin-bottom:10px; font-size:0.82rem; color:var(--t2); line-height:1.6; }
 .sf-tip-n { font-family:var(--mono); font-size:0.62rem; color:var(--teal); background:var(--teal-bg); border:1px solid var(--bhi); border-radius:3px; padding:2px 7px; font-weight:500; min-width:26px; text-align:center; flex-shrink:0; height:fit-content; }
 .sf-talk  { font-size:0.82rem; color:var(--t2); padding:8px 0 8px 14px; border-left:2px solid var(--teal); margin-bottom:7px; line-height:1.55; }
@@ -471,7 +472,7 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-search-title  { font-size:0.9rem; font-weight:600; color:var(--teal); text-decoration:none; }
 .sf-search-title:hover { text-decoration:underline; }
 .sf-search-url    { font-family:var(--mono); font-size:0.65rem; color:var(--t4); margin:3px 0 5px; }
-.sf-search-body   { font-size:0.78rem; color:var(--t2); line-height:1.55; }
+.sf-search-body   { font-size:0.78rem; color:var(--t2); line-height:1.55; -webkit-line-clamp:3; overflow:hidden; max-height:4.8em; }
 .sf-insight       { background:rgba(45,212,191,0.03); border-left:2px solid var(--teal); border-radius:0 5px 5px 0; padding:9px 13px; margin-bottom:6px; font-size:0.82rem; color:var(--t2); line-height:1.55; }
 .sf-trend-pill    { display:inline-flex; align-items:center; gap:6px; background:var(--s2); border:1px solid var(--border); border-radius:6px; padding:6px 12px; margin:4px; font-size:0.78rem; }
 .sf-empty-state   { background:var(--s2); border:1px solid var(--border); border-radius:8px; padding:20px 24px; text-align:center; font-family:var(--mono); font-size:0.75rem; color:var(--t3); }
@@ -511,6 +512,26 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-impact-val   { font-family:var(--mono); font-size:2rem; font-weight:500; line-height:1; }
 .sf-impact-arrow { font-size:1.2rem; color:var(--t4); padding:0 20px; flex-shrink:0; }
 .sf-impact-sub   { font-family:var(--mono); font-size:0.65rem; color:var(--t3); text-align:center; line-height:1.6; }
+
+/* B1 fix — priority card bar not flush */
+.sf-priority-card { padding-bottom: 16px !important; }
+.sf-priority-bar  { margin-top:12px; margin-bottom:2px; }
+
+/* B4 fix — metric strip aligned */
+.sf-metric-card { min-height:100px; }
+.sf-metric-sub  { min-height:2.4em; overflow:hidden; }
+
+/* B8 fix — biz case dividers don't collapse */
+.sf-biz-div { flex-shrink:0; }
+
+/* D3 fix — sf-page class */
+.sf-page { max-width:1400px; margin:0 auto; }
+
+/* D5 fix — search body Firefox fallback */
+.sf-search-body { overflow:hidden; max-height:4.8em; }
+
+/* B5 fix — thicker ATS bar */
+.sf-prog { height:6px; }
 
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 @keyframes spin  { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
@@ -859,22 +880,32 @@ def render_banner(res: dict) -> None:
 
     name  = c.get("name", "Unknown") or "Unknown"
     crole = c.get("current_role", "") or ""
-    yrs   = int(c.get("years_experience") or 0)
+    yrs   = _safe_int(c.get("years_experience"))
     sen   = c.get("seniority", "") or ""
     trole = jd.get("role_title", "") or ""
 
-    cur   = int(im.get("current_fit")   or 0)
-    proj  = int(im.get("projected_fit") or 0)
-    delta = int(im.get("fit_delta")     or 0)
+    cur   = _safe_int(im.get("current_fit"))
+    proj  = _safe_int(im.get("projected_fit"))
+    delta = _safe_int(im.get("fit_delta"))
     iv_c  = iv.get("color", "#4ade80") or "#4ade80"
-    ats   = int(ql.get("ats_score")     or 0)
+    ats   = _safe_int(ql.get("ats_score"))
     grade = ql.get("overall_grade", "–") or "–"
+
+    ats_display_banner = f"{ats}%" if ats > 0 else "–"
+    ats_color_banner   = "var(--teal)" if ats > 0 else "var(--t3)"
 
     fit_c        = "#64748b" if cur < 40 else _AMBER if cur < 65 else _GREEN
     cache_badge  = '<span class="sf-cache-badge">⚡ Cached</span>' if res.get("_cache_hit") else ""
     vision_badge = '<span class="sf-vision-badge">🖼 Vision OCR</span>' if res.get("_is_image") else ""
-    hpd_val      = int(st.session_state.get("hpd", 2) or 2)
-    roadmap_hrs  = int(im.get("roadmap_hours", 0))
+    hpd_val      = _safe_int(st.session_state.get("hpd", 2), default=2)
+    roadmap_hrs  = _safe_int(im.get("roadmap_hours"))
+
+    modules_count  = _safe_int(im.get("modules_count"))
+    gaps_addressed = _safe_int(im.get("gaps_addressed"))
+    total_skills   = _safe_int(im.get("total_skills"))
+    known_skills   = _safe_int(im.get("known_skills"))
+    critical_count = _safe_int(im.get("critical_count"))
+    completeness   = _safe_int(ql.get("completeness_score"))
 
     st.markdown(f"""
     <div class="sf-banner">
@@ -909,25 +940,25 @@ def render_banner(res: dict) -> None:
           <div class="sf-metric-sub">{iv.get('label','–')} · {iv.get('advice','')}</div>
         </div>
         <div class="sf-metric-card">
-          <div class="sf-metric-n" style="color:var(--teal)">{ats}%</div>
+          <div class="sf-metric-n" style="color:{ats_color_banner}">{ats_display_banner}</div>
           <div class="sf-metric-l">ATS Score</div>
-          <div class="sf-metric-sub">Grade <strong style="color:var(--teal)">{grade}</strong> · {int(ql.get('completeness_score') or 0)}% complete</div>
+          <div class="sf-metric-sub">Grade <strong style="color:var(--teal)">{grade}</strong> · {completeness}% complete</div>
         </div>
         <div class="sf-metric-card">
-          <div class="sf-metric-n" style="color:var(--t1)">{im['modules_count']}</div>
+          <div class="sf-metric-n" style="color:var(--t1)">{modules_count}</div>
           <div class="sf-metric-l">Modules</div>
-          <div class="sf-metric-sub">{im.get('critical_count', 0)} on critical path</div>
+          <div class="sf-metric-sub">{critical_count} on critical path</div>
         </div>
         <div class="sf-metric-card">
-          <div class="sf-metric-n" style="color:var(--t1)">{im['gaps_addressed']}/{im['total_skills']}</div>
+          <div class="sf-metric-n" style="color:var(--t1)">{gaps_addressed}/{total_skills}</div>
           <div class="sf-metric-l">Skills Covered</div>
-          <div class="sf-metric-sub">{im['known_skills']} already known</div>
+          <div class="sf-metric-sub">{known_skills} already known</div>
         </div>
       </div>
 
       <div class="sf-ground-badge">
         <span class="sf-ground-dot"></span>
-        Catalog-grounded · All {im['modules_count']} modules from 47-course catalog · {im['critical_count']} on critical path
+        Catalog-grounded · All {modules_count} modules from 47-course catalog · {critical_count} on critical path
       </div>
     </div>""", unsafe_allow_html=True)
 
@@ -939,8 +970,7 @@ def render_banner(res: dict) -> None:
         )
 
     # ── TOP 3 PRIORITIES THIS WEEK ──
-    gp      = res["gap_profile"]
-    path    = res["path"]
+    gp   = res["gap_profile"]
     missing_req = [g for g in gp if g["status"] == "Missing" and g["is_required"]][:3]
     if missing_req:
         cards_html = ""
@@ -949,12 +979,13 @@ def render_banner(res: dict) -> None:
             co   = g.get("catalog_course") or {}
             hrs  = _safe_int(co.get("duration_hrs"))
             lvl  = co.get("level","") or ""
+            hrs_label = f"{hrs}h to close" if hrs > 0 else "est. ~8h"
             fill_pct = min(100, round(hrs / max_hrs * 80) + 20) if hrs > 0 else 30
             cards_html += f"""
             <div class="sf-priority-card">
               <div class="sf-priority-rank">PRIORITY {i+1} · MISSING · REQUIRED</div>
               <div class="sf-priority-skill">{g['skill']}</div>
-              <div class="sf-priority-meta">{hrs}h to close · {lvl}</div>
+              <div class="sf-priority-meta">{hrs_label} · {lvl}</div>
               <div class="sf-priority-bar"><div class="sf-priority-bar-fill" style="width:{fill_pct}%"></div></div>
             </div>"""
         st.markdown(f"""
@@ -962,6 +993,8 @@ def render_banner(res: dict) -> None:
           <div class="sf-priorities-hd">⚡ Your top {len(missing_req)} priorities right now</div>
           <div class="sf-priority-row">{cards_html}</div>
         </div>""", unsafe_allow_html=True)
+
+    st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
 
 # =============================================================================
 #  TAB: GAP ANALYSIS — visual weight hierarchy
@@ -975,7 +1008,7 @@ def render_tab_overview(res: dict) -> None:
     p_c = sum(1 for g in gp if g["status"] == "Partial")
     m_c = sum(1 for g in gp if g["status"] == "Missing")
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="sf-sh">Skill gap</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="sf-ss">{k_c} known · {p_c} partial · {m_c} missing</div>', unsafe_allow_html=True)
 
@@ -995,7 +1028,7 @@ def render_tab_overview(res: dict) -> None:
         for g in filtered:
             s     = g["status"]
             req   = g["is_required"]
-            prof  = int(g.get("proficiency") or 0)
+            prof  = _safe_int(g.get("proficiency"))
             pct   = prof / 10 * 100
             trend = trends.get(g["skill"]) or _bk.demand_label(g["skill"])
             tc    = _RED if "Hot" in trend else _AMBER if "Growing" in trend else "#3d4d66"
@@ -1098,10 +1131,7 @@ def render_tab_overview(res: dict) -> None:
               <div style="font-size:0.72rem;color:var(--t3);margin-top:5px">{pct_sub}</div>
             </div>""", unsafe_allow_html=True)
 
-        try:
-            sal_med = float(sal.get("median_lpa") or 0)
-        except (TypeError, ValueError):
-            sal_med = 0.0
+        sal_med = _safe_float(sal.get("median_lpa"))
         if sal and sal_med > 0:
             st.markdown(f'<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin:16px 0 4px">Live salary benchmark</div>', unsafe_allow_html=True)
             _sal_fig = salary_chart(sal)
@@ -1122,7 +1152,6 @@ def render_tab_roadmap(res: dict) -> None:
                      res.get("jd",{}).get("role_title","")).replace(" ","_")[:40]
     storage_key   = f"sf_progress_{candidate_key}"
 
-    import streamlit.components.v1 as _components
     _components.html(f"""
     <script>
     (function() {{
@@ -1137,16 +1166,14 @@ def render_tab_roadmap(res: dict) -> None:
     completed = set(st.session_state.get("completed", []))
 
     # ── BUSINESS CASE at TOP ──
-    roadmap_hrs    = int(im.get("roadmap_hours", 0))
+    roadmap_hrs    = _safe_int(im.get("roadmap_hours"))
     train_cost_inr = roadmap_hrs * 500
     hire_cost_inr  = 1000000
     savings_inr    = max(0, hire_cost_inr - train_cost_inr)
     sal            = res.get("salary", {}) or {}
-    try:
-        sal_med = float(sal.get("median_lpa") or 0)
-    except (TypeError, ValueError):
-        sal_med = 0.0
+    sal_med        = _safe_float(sal.get("median_lpa"))
 
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
     st.markdown(f"""
     <div class="sf-biz-case">
       <div class="sf-biz-hd">💰 Business case: train vs hire</div>
@@ -1177,10 +1204,10 @@ def render_tab_roadmap(res: dict) -> None:
         st.markdown('<div class="sf-ss">Dependency-ordered · critical path highlighted · check off as you complete</div>', unsafe_allow_html=True)
     with hd_r:
         hpd = st.select_slider("Pace (h/day)", options=[1,2,4,8],
-                                value=int(st.session_state.get("hpd",2) or 2),
+                                value=_safe_int(st.session_state.get("hpd",2), default=2),
                                 key="hpd_slider")
         st.session_state["hpd"] = hpd
-        rem = sum(int(m.get("duration_hrs") or 0) for m in path if m["id"] not in completed)
+        rem = sum(_safe_int(m.get("duration_hrs")) for m in path if m["id"] not in completed)
         st.markdown(f'<p style="font-family:var(--mono);font-size:0.72rem;color:var(--t2);text-align:right">{rem}h remaining · <strong style="color:var(--teal)">{weeks_ready(rem, hpd)}</strong></p>', unsafe_allow_html=True)
 
     # ── WEEK 1 PLAN — expanded by default ──
@@ -1227,7 +1254,7 @@ def render_tab_roadmap(res: dict) -> None:
         for phase_name, mods in phases:
             if not mods:
                 continue
-            phase_hrs = sum(int(m.get("duration_hrs") or 0) for m in mods)
+            phase_hrs = sum(_safe_int(m.get("duration_hrs")) for m in mods)
             st.markdown(f'<div class="sf-phase-hd">{phase_name} <span style="font-weight:400;color:var(--t4)">{len(mods)} modules · {phase_hrs}h</span></div>', unsafe_allow_html=True)
             for m in mods:
                 idx    += 1
@@ -1238,7 +1265,7 @@ def render_tab_roadmap(res: dict) -> None:
                 dc      = " done" if is_done else ""
 
                 chk = st.checkbox(
-                    f"{m['title']} · {int(m.get('duration_hrs') or 0)}h · {m['level']}",
+                    f"{m['title']} · {_safe_int(m.get('duration_hrs'))}h · {m['level']}",
                     value=is_done, key=f"c_{m['id']}"
                 )
                 if chk:
@@ -1272,7 +1299,7 @@ def render_tab_roadmap(res: dict) -> None:
                     f'<div class="sf-mod-tags">{"".join(tags)}</div>'
                     f'{reason_html}'
                     f'</div>'
-                    f'<div class="sf-mod-hrs">{int(m.get("duration_hrs") or 0)}h</div>'
+                    f'<div class="sf-mod-hrs">{_safe_int(m.get("duration_hrs"))}h</div>'
                     f'</div></div>',
                     unsafe_allow_html=True,
                 )
@@ -1326,7 +1353,7 @@ def render_tab_research(res: dict) -> None:
     trends = res.get("skill_trends",    {}) or {}
     jd     = res["jd"]
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="sf-sh">Web research</div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-ss">Live salary data · market insights · course finder · skill demand</div>', unsafe_allow_html=True)
 
@@ -1334,12 +1361,12 @@ def render_tab_research(res: dict) -> None:
     sal_col, mkt_col = st.columns(2, gap="large")
     with sal_col:
         st.markdown('<div style="font-size:0.9rem;font-weight:600;color:var(--t1);margin-bottom:10px">Salary benchmark</div>', unsafe_allow_html=True)
-        try:
-            sal_med = float(sal.get("median_lpa") or 0)
-        except (TypeError, ValueError):
-            sal_med = 0.0
+        sal_med = _safe_float(sal.get("median_lpa"))
         if sal and sal_med > 0:
-            st.plotly_chart(salary_chart(sal), use_container_width=True,
+            _sal_fig_r = salary_chart(sal)
+            if hasattr(_sal_fig_r, 'update_layout'):
+                _sal_fig_r.update_layout(margin=dict(t=44, b=36, l=8, r=8))
+            st.plotly_chart(_sal_fig_r, use_container_width=True,
                              config={"displayModeBar": False}, key="salary_research")
             st.caption(f"Source: {sal.get('source','web')} · {sal.get('note','')}")
         else:
@@ -1407,7 +1434,7 @@ def render_tab_research(res: dict) -> None:
             sc_cols = st.columns(len(shortcuts))
             for i, (lbl, q) in enumerate(shortcuts):
                 with sc_cols[i]:
-                    if st.button(lbl[:22], key=f"sc_{i}", use_container_width=True, type="secondary"):
+                    if st.button(lbl, key=f"sc_{i}", use_container_width=True, type="secondary"):
                         st.session_state.pop("search_input", None)
                         st.session_state["search_query"]   = q
                         st.session_state["search_results"] = ddg_search(q, max_results=8)
@@ -1452,6 +1479,7 @@ def render_tab_research(res: dict) -> None:
                 st.rerun()
         cached = st.session_state.get("course_cache", {}).get(sel_s, [])
         if cached:
+            st.markdown(f'<div style="font-family:var(--mono);font-size:0.65rem;color:var(--t3);margin-bottom:8px">Results for: <strong style="color:var(--t2)">{sel_s}</strong></div>', unsafe_allow_html=True)
             for crs in cached:
                 st.markdown(
                     f'<div class="sf-search-result">'
@@ -1475,19 +1503,16 @@ def render_tab_ats_export(res: dict) -> None:
     ql      = res.get("quality",   {}) or {}
     iv      = res.get("interview", {}) or {}
     sm      = res.get("seniority", {}) or {}
-    cgm     = int(res.get("career_months", 0) or 0)
+    cgm     = _safe_int(res.get("career_months"))
     sal     = res.get("salary",    {}) or {}
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="sf-sh">ATS audit</div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-ss">Resume quality scores · improvement tips · keyword gaps · talking points</div>', unsafe_allow_html=True)
 
     # ── SALARY OUTCOME INSIGHT (new) ──
-    try:
-        sal_med = float(sal.get("median_lpa") or 0)
-        sal_max = float(sal.get("max_lpa") or 0)
-    except (TypeError, ValueError):
-        sal_med = sal_max = 0.0
+    sal_med = _safe_float(sal.get("median_lpa"))
+    sal_max = _safe_float(sal.get("max_lpa"))
 
     if sal_med > 0:
         curr    = sal.get("currency", "INR")
@@ -1499,7 +1524,7 @@ def render_tab_ats_export(res: dict) -> None:
           <div class="sf-salary-outcome-body">
             <div class="sf-salary-outcome-label">Roadmap outcome</div>
             <div class="sf-salary-outcome-text">Completing this roadmap targets the <strong style="color:var(--teal)">{sym}{sal_med}{unit} median salary</strong> range for {jd.get('role_title','this role')}</div>
-            <div class="sf-salary-outcome-sub">Up to {sym}{sal_max}{unit} with {int(im.get('roadmap_hours',0))}h of focused upskilling · Source: {sal.get('source','market data')}</div>
+            <div class="sf-salary-outcome-sub">Up to {sym}{sal_max}{unit} with {_safe_int(im.get('roadmap_hours'))}h of focused upskilling · Source: {sal.get('source','market data')}</div>
           </div>
         </div>""", unsafe_allow_html=True)
 
@@ -1511,6 +1536,9 @@ def render_tab_ats_export(res: dict) -> None:
     ats_display  = f"{ats_pct}%" if ats_pct > 0 else "–"
     compl_display= f"{compl}%"   if compl  > 0 else "–"
     clar_display = f"{clarity}%" if clarity> 0 else "–"
+
+    prog_color = "var(--red)" if ats_pct < 40 else "var(--amber)" if ats_pct < 70 else "var(--teal)"
+
     st.markdown(f"""
     <div class="sf-ats-row">
       <div class="sf-ats-card"><div class="sf-ats-n">{ats_display}</div><div class="sf-ats-l">ATS Score</div></div>
@@ -1518,7 +1546,7 @@ def render_tab_ats_export(res: dict) -> None:
       <div class="sf-ats-card"><div class="sf-ats-n">{compl_display}</div><div class="sf-ats-l">Completeness</div></div>
       <div class="sf-ats-card"><div class="sf-ats-n">{clar_display}</div><div class="sf-ats-l">Clarity</div></div>
     </div>
-    <div class="sf-prog"><div class="sf-prog-fill" style="width:{ats_pct}%"></div></div>
+    <div class="sf-prog"><div class="sf-prog-fill" style="width:{ats_pct}%;background:{prog_color}"></div></div>
     """, unsafe_allow_html=True)
 
     left, right = st.columns(2, gap="large")
@@ -1546,13 +1574,15 @@ def render_tab_ats_export(res: dict) -> None:
 
         st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
-        c1.metric("Interview", f"{iv.get('score', 0)}%", iv.get("label","–"))
+        c1.metric("Interview", f"{iv.get('score', 0)}%", iv.get("label","–"), delta_color="off")
         c2.metric("Seniority gap",
                   f"{sm.get('gap_levels', 0)} level{'s' if sm.get('gap_levels',0)!=1 else ''}"
-                  if sm.get('gap_levels',0) > 0 else "None")
+                  if sm.get('gap_levels',0) > 0 else "None",
+                  delta_color="off")
         c3.metric("Time to level up",
                   f"~{cgm}mo" if cgm else "On track",
-                  "est. to reach target seniority" if cgm else "")
+                  "est. to reach target seniority" if cgm else "",
+                  delta_color="off")
 
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
     st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin-bottom:4px">AI resume rewrite</div>', unsafe_allow_html=True)
@@ -1579,7 +1609,8 @@ def render_tab_ats_export(res: dict) -> None:
             st.session_state["rw_ats_after"]  = min(88, ats_pct + improvement)
 
         rw = st.session_state.get("rw_result")
-        if rw:
+        rw_failed = not rw or rw.strip().lower().startswith("could not")
+        if rw and not rw_failed:
             before_score = st.session_state.get("rw_ats_before", ats_pct)
             after_score  = st.session_state.get("rw_ats_after",  min(88, ats_pct + 10))
             delta        = after_score - before_score
@@ -1607,6 +1638,8 @@ def render_tab_ats_export(res: dict) -> None:
             st.download_button("Download rewritten resume", data=rw,
                                 file_name="skillforge_rewritten.txt", mime="text/plain",
                                 key="dl_rewrite")
+        elif rw:
+            st.error("Resume rewrite failed. Please try again.")
     elif st.session_state.get("resume_image"):
         st.info("Image resume detected — using extracted candidate info for rewrite.")
 
@@ -1687,7 +1720,7 @@ def render_tab_ats_export(res: dict) -> None:
         for k, v in export_meta:
             st.markdown(f'<div class="sf-export-row"><span class="sf-ek">{k}</span><span class="sf-ev">{v}</span></div>', unsafe_allow_html=True)
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-        hpd_val  = int(st.session_state.get("hpd", 2) or 2)
+        hpd_val  = _safe_int(st.session_state.get("hpd", 2), default=2)
         ics_data = build_ics_calendar(roadmap, hpd=hpd_val)
         nm       = (c.get("name","candidate") or "candidate").replace(" ","_")
         st.download_button("Download .ics Calendar", data=ics_data,
@@ -1704,16 +1737,16 @@ def render_tab_interview_prep(res: dict) -> None:
     jd        = res.get("jd",          {})
     iv        = res.get("interview",   {})
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="sf-sh">Interview prep</div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-ss">AI-generated questions per skill · calibrated to your seniority level</div>', unsafe_allow_html=True)
 
     score = iv.get("score", 0)
     label = iv.get("label", "–")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Readiness score",       f"{score}%",                                 label,          delta_color="off")
-    col2.metric("Skills you can answer", str(iv.get("req_known", 0) or 0),           "ready now",    delta_color="off")
-    col3.metric("Skills needing prep",   str(iv.get("req_missing", 0) or 0),         "study first",  delta_color="off")
+    col1.metric("Readiness score",       f"{score}%",                                         label,          delta_color="off")
+    col2.metric("Skills you can answer", str(_safe_int(iv.get("req_known"))),                 "ready now",    delta_color="off")
+    col3.metric("Skills needing prep",   str(_safe_int(iv.get("req_missing"))),               "study first",  delta_color="off")
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
@@ -1744,13 +1777,17 @@ def render_tab_interview_prep(res: dict) -> None:
 
     if iq:
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        first_known_expanded = False
         for g in preppable:
             skill  = g["skill"]
-            prof   = g["proficiency"]
+            prof   = _safe_int(g.get("proficiency"))
             status = g["status"]
             bc     = "sf-st-known" if status == "Known" else "sf-st-partial"
             qs     = iq.get(skill, [])
-            with st.expander(f"{skill}  ·  {prof}/10", expanded=(status=="Known")):
+            should_expand = (status == "Known" and not first_known_expanded)
+            if should_expand:
+                first_known_expanded = True
+            with st.expander(f"{skill}  ·  {prof}/10", expanded=should_expand):
                 seniority = candidate.get("seniority","Mid")
                 ctx_text  = _strip_mern_prefix(g.get("context",""))
                 st.markdown(
@@ -1783,7 +1820,7 @@ def render_tab_interview_prep(res: dict) -> None:
         for g in gp:
             if g["status"] == "Known" and g["is_required"] and g.get("context"):
                 st.markdown(
-                    f'<div class="sf-talk">→ <strong>{g["skill"]}</strong> ({g["proficiency"]}/10): '
+                    f'<div class="sf-talk">→ <strong>{g["skill"]}</strong> ({_safe_int(g.get("proficiency"))}/10): '
                     f'{_strip_mern_prefix(g["context"])}</div>',
                     unsafe_allow_html=True,
                 )
@@ -1795,7 +1832,7 @@ def render_tab_interview_prep(res: dict) -> None:
                 f'<div style="background:var(--s1);border:1px solid var(--border);'
                 f'border-left:3px solid {col_c};border-radius:0 9px 9px 0;'
                 f'padding:12px 16px;margin-bottom:8px;">'
-                f'<div style="font-size:0.88rem;font-weight:600;color:var(--t1)">{g["skill"]} · {g["proficiency"]}/10</div>'
+                f'<div style="font-size:0.88rem;font-weight:600;color:var(--t1)">{g["skill"]} · {_safe_int(g.get("proficiency"))}/10</div>'
                 f'<div style="font-family:var(--mono);font-size:0.68rem;color:var(--t3);margin-top:4px">'
                 f'{_strip_mern_prefix(g.get("context","No context available"))}</div>'
                 f'</div>',
@@ -1877,6 +1914,7 @@ def render_results() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
     render_banner(res)
+    st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
 
     # ── 5 TABS (no DAG) ──
     tab_gap, tab_road, tab_prep, tab_research, tab_ats = st.tabs([
