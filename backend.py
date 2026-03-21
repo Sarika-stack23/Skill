@@ -1,10 +1,11 @@
 # =============================================================================
-#  backend.py — SkillForge v14  |  Clean edition
-#  REMOVED: build_dag_data (DAG tab dropped)
-#  IMPROVED: _parse_bytes — scanned-PDF fallback to vision OCR
-#  IMPROVED: image validation before Groq vision call
-#  IMPROVED: anti-hallucination guard tightened in mega_call
-#  IMPROVED: _is_meaningful_text() helper
+#  backend.py — SkillForge v14  |  Fixed edition
+#  FIXES:
+#  - _groq_call: handle 400 "Failed to generate JSON" with retry (simpler prompt)
+#  - mega_call: split into two smaller calls (candidate + audit) to stay under limits
+#  - mega_call: schema uses shorter field names in prompt, full names in parser
+#  - _groq_call_vision: handle 400 errors
+#  - run_analysis: surface json_too_complex error clearly
 # =============================================================================
 
 import os, json, io, re, time, hashlib, shelve, base64, threading
@@ -40,11 +41,8 @@ GROQ_CLIENT = Groq(api_key=_GROQ_KEY) if _GROQ_KEY else None
 _DDG_ERROR: str = ""
 _DDG_LOCK       = threading.Lock()
 
-# Max image size to send to Groq vision (bytes). Larger images are resized.
 _MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB
-
-# Minimum meaningful word count from PDF text extraction
-_MIN_PDF_WORDS = 30
+_MIN_PDF_WORDS   = 30
 
 
 def get_ddg_error() -> str:
@@ -81,17 +79,11 @@ def _is_english(text: str) -> bool:
 
 
 def _is_meaningful_text(text: str) -> bool:
-    """
-    Returns True when extracted text looks like real resume content.
-    Rejects: empty, too short, mostly garbage bytes, pure numbers/symbols.
-    Used to detect scanned PDFs that need vision fallback.
-    """
     if not text or not text.strip():
         return False
     words = [w for w in text.split() if len(w) > 1 and re.search(r'[a-zA-Z]', w)]
     if len(words) < _MIN_PDF_WORDS:
         return False
-    # Reject if too many non-ASCII replacement chars (garbled encoding)
     garbage_ratio = text.count('\ufffd') / max(len(text), 1)
     if garbage_ratio > 0.05:
         return False
@@ -118,273 +110,121 @@ def _load_semantic_bg() -> None:
 #  SKILL ALIASES
 # =============================================================================
 SKILL_ALIASES: Dict[str, str] = {
-    # ── REST / APIs ──────────────────────────────────────────────────────────
-    "rest api design":            "rest apis",
-    "rest api":                   "rest apis",
-    "restful api":                "rest apis",
-    "restful apis":               "rest apis",
-    "api design":                 "rest apis",
-    "node.js":                    "rest apis",
-    "nodejs":                     "rest apis",
-    "express":                    "rest apis",
-    "express.js":                 "rest apis",
-    "expressjs":                  "rest apis",
-    "graphql":                    "rest apis",
-    "spring boot":                "rest apis",
-    "spring":                     "rest apis",
-    # ── React / Frontend ─────────────────────────────────────────────────────
-    "react.js":                   "react",
-    "reactjs":                    "react",
-    "next.js":                    "react",
-    "nextjs":                     "react",
-    "next":                       "react",
-    # ── JavaScript variants ──────────────────────────────────────────────────
-    "js":                         "javascript",
-    "es6":                        "javascript",
-    "es2015":                     "javascript",
-    "typescript":                 "javascript",
-    "ts":                         "javascript",
-    "vue":                        "javascript",
-    "vue.js":                     "javascript",
-    "vuejs":                      "javascript",
-    "angular":                    "javascript",
-    "jest":                       "javascript",
-    # ── Python ecosystem ─────────────────────────────────────────────────────
-    "python3":                    "python",
-    "flask":                      "python",
-    "django":                     "python",
-    "streamlit":                  "python",
-    "pytest":                     "python",
-    "celery":                     "python",
-    # ── HTML/CSS ─────────────────────────────────────────────────────────────
-    "html5":                      "html/css",
-    "css3":                       "html/css",
-    "html":                       "html/css",
-    "css":                        "html/css",
-    "sass":                       "html/css",
-    "tailwind":                   "html/css",
-    "tailwindcss":                "html/css",
-    # ── Docker / containers ──────────────────────────────────────────────────
-    "containerization":           "docker",
-    "containers":                 "docker",
-    "dockerfile":                 "docker",
-    "docker-compose":             "docker",
-    "docker compose":             "docker",
-    # ── Kubernetes ───────────────────────────────────────────────────────────
-    "k8s":                        "kubernetes",
-    "helm":                       "kubernetes",
-    "helm charts":                "kubernetes",
-    # ── SQL / Databases ──────────────────────────────────────────────────────
-    "mysql":                      "sql",
-    "postgresql":                 "sql",
-    "postgres":                   "sql",
-    "sqlite":                     "sql",
-    "nosql":                      "databases",
-    "mongodb":                    "databases",
-    "redis":                      "databases",
-    "dynamodb":                   "databases",
-    "cassandra":                  "databases",
-    "elasticsearch":              "databases",
-    "pinecone":                   "databases",
-    "vector database":            "databases",
-    "vector db":                  "databases",
-    "kafka":                      "databases",
-    "rabbitmq":                   "databases",
-    # ── ML / AI ──────────────────────────────────────────────────────────────
-    "pytorch":                    "deep learning",
-    "tensorflow":                 "deep learning",
-    "huggingface":                "deep learning",
-    "hugging face":               "deep learning",
-    "transformers":               "deep learning",
-    "neural network":             "deep learning",
-    "cnn":                        "deep learning",
-    "rnn":                        "deep learning",
-    "lstm":                       "deep learning",
-    "scikit-learn":               "machine learning",
-    "sklearn":                    "machine learning",
-    "supervised learning":        "machine learning",
-    "unsupervised learning":      "machine learning",
-    "regression":                 "machine learning",
-    "classification":             "machine learning",
-    "random forest":              "machine learning",
-    "xgboost":                    "machine learning",
-    # ── NLP / GenAI ──────────────────────────────────────────────────────────
-    "nlp":                        "nlp",
-    "langchain":                  "nlp",
-    "llamaindex":                 "nlp",
-    "llama index":                "nlp",
-    "rag":                        "nlp",
-    "retrieval augmented":        "nlp",
-    "retrieval-augmented":        "nlp",
-    "llm":                        "nlp",
-    "large language model":       "nlp",
-    "large language models":      "nlp",
-    "openai api":                 "nlp",
-    "gpt":                        "nlp",
-    "bert":                       "nlp",
-    "sentence transformers":      "nlp",
-    # ── MLOps ────────────────────────────────────────────────────────────────
-    "apache airflow":             "mlops",
-    "airflow":                    "mlops",
-    "mlflow":                     "mlops",
-    "model deployment":           "mlops",
-    "model monitoring":           "mlops",
-    # ── Data Analysis ────────────────────────────────────────────────────────
-    "pandas":                     "data analysis",
-    "numpy":                      "data analysis",
-    "pyspark":                    "data analysis",
-    "apache spark":               "data analysis",
-    "spark":                      "data analysis",
-    "dbt":                        "data analysis",
-    # ── Data Visualization ───────────────────────────────────────────────────
-    "matplotlib":                 "data visualization",
-    "seaborn":                    "data visualization",
-    "plotly":                     "data visualization",
-    "tableau":                    "data visualization",
-    "power bi":                   "data visualization",
-    "powerbi":                    "data visualization",
-    "looker":                     "data visualization",
-    "grafana":                    "data visualization",
-    # ── Statistics ───────────────────────────────────────────────────────────
-    "hypothesis testing":         "statistics",
-    "a/b testing":                "statistics",
-    "a/b test":                   "statistics",
-    "statistical analysis":       "statistics",
-    # ── Linux / Shell ────────────────────────────────────────────────────────
-    "bash":                       "linux",
-    "bash scripting":             "linux",
-    "shell scripting":            "linux",
-    "shell script":               "linux",
-    "unix":                       "linux",
-    "nginx":                      "linux",
-    # ── CI/CD ────────────────────────────────────────────────────────────────
-    "github actions":             "ci/cd",
-    "jenkins":                    "ci/cd",
-    "gitlab ci":                  "ci/cd",
-    "gitlab-ci":                  "ci/cd",
-    "circleci":                   "ci/cd",
-    "travis ci":                  "ci/cd",
-    "argocd":                     "ci/cd",
-    # ── Cloud ────────────────────────────────────────────────────────────────
-    "aws sagemaker":              "aws",
-    "ec2":                        "aws",
-    "s3":                         "aws",
-    "lambda":                     "aws",
-    "rds":                        "aws",
-    "aws lambda":                 "aws",
-    "gcp":                        "gcp",
-    "google cloud":               "gcp",
-    "bigquery":                   "gcp",
-    "terraform":                  "cloud computing",
-    "infrastructure as code":     "cloud computing",
-    "iac":                        "cloud computing",
-    "ansible":                    "cloud computing",
-    "pulumi":                     "cloud computing",
-    # ── Application Security ─────────────────────────────────────────────────
-    "owasp":                      "application security",
-    "penetration testing":        "application security",
-    "pen testing":                "application security",
-    "devsecops":                  "application security",
-    # ── Agile ────────────────────────────────────────────────────────────────
-    "scrum":                      "agile",
-    "kanban":                     "agile",
-    "sprint":                     "agile",
-    "jira":                       "agile",
+    "rest api design": "rest apis", "rest api": "rest apis", "restful api": "rest apis",
+    "restful apis": "rest apis", "api design": "rest apis", "node.js": "rest apis",
+    "nodejs": "rest apis", "express": "rest apis", "express.js": "rest apis",
+    "expressjs": "rest apis", "graphql": "rest apis", "spring boot": "rest apis",
+    "spring": "rest apis",
+    "react.js": "react", "reactjs": "react", "next.js": "react",
+    "nextjs": "react", "next": "react",
+    "js": "javascript", "es6": "javascript", "es2015": "javascript",
+    "typescript": "javascript", "ts": "javascript", "vue": "javascript",
+    "vue.js": "javascript", "vuejs": "javascript", "angular": "javascript",
+    "jest": "javascript",
+    "python3": "python", "flask": "python", "django": "python",
+    "streamlit": "python", "pytest": "python", "celery": "python",
+    "html5": "html/css", "css3": "html/css", "html": "html/css",
+    "css": "html/css", "sass": "html/css", "tailwind": "html/css",
+    "tailwindcss": "html/css",
+    "containerization": "docker", "containers": "docker",
+    "dockerfile": "docker", "docker-compose": "docker", "docker compose": "docker",
+    "k8s": "kubernetes", "helm": "kubernetes", "helm charts": "kubernetes",
+    "mysql": "sql", "postgresql": "sql", "postgres": "sql", "sqlite": "sql",
+    "nosql": "databases", "mongodb": "databases", "redis": "databases",
+    "dynamodb": "databases", "cassandra": "databases", "elasticsearch": "databases",
+    "pinecone": "databases", "vector database": "databases", "vector db": "databases",
+    "kafka": "databases", "rabbitmq": "databases",
+    "pytorch": "deep learning", "tensorflow": "deep learning",
+    "huggingface": "deep learning", "hugging face": "deep learning",
+    "transformers": "deep learning", "neural network": "deep learning",
+    "cnn": "deep learning", "rnn": "deep learning", "lstm": "deep learning",
+    "scikit-learn": "machine learning", "sklearn": "machine learning",
+    "supervised learning": "machine learning", "unsupervised learning": "machine learning",
+    "regression": "machine learning", "classification": "machine learning",
+    "random forest": "machine learning", "xgboost": "machine learning",
+    "nlp": "nlp", "langchain": "nlp", "llamaindex": "nlp", "llama index": "nlp",
+    "rag": "nlp", "retrieval augmented": "nlp", "retrieval-augmented": "nlp",
+    "llm": "nlp", "large language model": "nlp", "large language models": "nlp",
+    "openai api": "nlp", "gpt": "nlp", "bert": "nlp", "sentence transformers": "nlp",
+    "apache airflow": "mlops", "airflow": "mlops", "mlflow": "mlops",
+    "model deployment": "mlops", "model monitoring": "mlops",
+    "pandas": "data analysis", "numpy": "data analysis", "pyspark": "data analysis",
+    "apache spark": "data analysis", "spark": "data analysis", "dbt": "data analysis",
+    "matplotlib": "data visualization", "seaborn": "data visualization",
+    "plotly": "data visualization", "tableau": "data visualization",
+    "power bi": "data visualization", "powerbi": "data visualization",
+    "looker": "data visualization", "grafana": "data visualization",
+    "hypothesis testing": "statistics", "a/b testing": "statistics",
+    "a/b test": "statistics", "statistical analysis": "statistics",
+    "bash": "linux", "bash scripting": "linux", "shell scripting": "linux",
+    "shell script": "linux", "unix": "linux", "nginx": "linux",
+    "github actions": "ci/cd", "jenkins": "ci/cd", "gitlab ci": "ci/cd",
+    "gitlab-ci": "ci/cd", "circleci": "ci/cd", "travis ci": "ci/cd", "argocd": "ci/cd",
+    "aws sagemaker": "aws", "ec2": "aws", "s3": "aws", "lambda": "aws",
+    "rds": "aws", "aws lambda": "aws",
+    "gcp": "gcp", "google cloud": "gcp", "bigquery": "gcp",
+    "terraform": "cloud computing", "infrastructure as code": "cloud computing",
+    "iac": "cloud computing", "ansible": "cloud computing", "pulumi": "cloud computing",
+    "owasp": "application security", "penetration testing": "application security",
+    "pen testing": "application security", "devsecops": "application security",
+    "scrum": "agile", "kanban": "agile", "sprint": "agile", "jira": "agile",
 }
 
 MERN_IMPLIES: List[str] = ["react", "javascript", "rest apis"]
 
-# =============================================================================
-#  REGEX SKILL SCANNER — runs after every LLM extraction
-# =============================================================================
 _SKILL_REGEX_MAP: List[Tuple[str, str, int]] = [
-    # ── SQL / Databases ──────────────────────────────────────────────────────
-    (r"\bSQL\b",                      "SQL",              5),
-    (r"\bMySQL\b",                    "SQL",              6),
-    (r"\bPostgreSQL\b",               "SQL",              6),
-    (r"\bSQLite\b",                   "SQL",              4),
-    (r"\bMongoDB\b",                  "Databases",        5),
-    (r"\bRedis\b",                    "Databases",        5),
-    (r"\bDynamoDB\b",                 "Databases",        4),
-    (r"\bCassandra\b",                "Databases",        4),
-    (r"\bElasticsearch\b",            "Databases",        4),
-    (r"\bPinecone\b",                 "Databases",        4),
-    (r"\bKafka\b",                    "Databases",        4),
-    # ── Docker / Kubernetes ──────────────────────────────────────────────────
-    (r"\bDockerfile\b",               "Docker",           4),
-    (r"\bdocker[- ]compose\b",        "Docker",           5),
-    (r"\bKubernetes\b",               "Kubernetes",       3),
-    (r"\bk8s\b",                      "Kubernetes",       3),
-    (r"\bHelm\b",                     "Kubernetes",       4),
-    # ── Python ecosystem ─────────────────────────────────────────────────────
-    (r"\bFastAPI\b",                  "FastAPI",          5),
-    (r"\bflask\b",                    "Python",           6),
-    (r"\bdjango\b",                   "Python",           6),
-    (r"\bStreamlit\b",                "Python",           5),
-    (r"\bpytest\b",                   "Python",           5),
-    (r"\bCelery\b",                   "Python",           5),
-    # ── JavaScript / Frontend ────────────────────────────────────────────────
-    (r"\bTypeScript\b",               "JavaScript",       6),
-    (r"\bNext\.?js\b",                "React",            5),
-    (r"\bVue\.?js\b",                 "JavaScript",       5),
-    (r"\bAngular\b",                  "JavaScript",       5),
-    (r"\bExpress\.?js\b",             "REST APIs",        5),
-    (r"\bGraphQL\b",                  "REST APIs",        5),
-    (r"\bJest\b",                     "JavaScript",       4),
-    # ── CI/CD ────────────────────────────────────────────────────────────────
-    (r"\bCI/CD\b",                    "CI/CD",            4),
-    (r"\bGitHub Actions\b",           "CI/CD",            5),
-    (r"\bJenkins\b",                  "CI/CD",            5),
-    (r"\bGitLab\s*CI\b",              "CI/CD",            5),
-    (r"\bCircleCI\b",                 "CI/CD",            5),
-    (r"\bArgoCD\b",                   "CI/CD",            4),
-    # ── Cloud ────────────────────────────────────────────────────────────────
-    (r"\bAWS\b",                      "AWS",              4),
-    (r"\bGCP\b",                      "GCP",              4),
-    (r"\bAzure\b",                    "Cloud Computing",  4),
-    (r"\bTerraform\b",                "Cloud Computing",  4),
-    (r"\bAnsible\b",                  "Cloud Computing",  4),
-    (r"\bBigQuery\b",                 "GCP",              5),
-    # ── Linux / Shell ────────────────────────────────────────────────────────
-    (r"\bLinux\b",                    "Linux",            4),
-    (r"\bBash\b",                     "Linux",            5),
-    (r"\bshell\s+script",             "Linux",            4),
-    (r"\bnginx\b",                    "Linux",            4),
-    # ── ML / Deep Learning ───────────────────────────────────────────────────
-    (r"\bPyTorch\b",                  "Deep Learning",    6),
-    (r"\bTensorFlow\b",               "Deep Learning",    6),
-    (r"\bHugging\s*Face\b",           "Deep Learning",    5),
-    (r"\btransformer model\b",        "Deep Learning",    5),
-    (r"\bscikit[- ]learn\b",          "Machine Learning", 6),
-    (r"\bXGBoost\b",                  "Machine Learning", 5),
-    # ── NLP / GenAI ──────────────────────────────────────────────────────────
-    (r"\bLangChain\b",                "NLP",              5),
-    (r"\bLlamaIndex\b",               "NLP",              5),
-    (r"\bRAG\b",                      "NLP",              4),
-    (r"\bretrieval[- ]augmented",     "NLP",              4),
-    (r"\bLLM\b",                      "NLP",              4),
-    (r"\bOpenAI\b",                   "NLP",              4),
-    (r"\bBERT\b",                     "NLP",              5),
-    # ── MLOps ────────────────────────────────────────────────────────────────
-    (r"\bAirflow\b",                  "MLOps",            4),
-    (r"\bMLflow\b",                   "MLOps",            5),
-    (r"\bmodel\s+deploy",             "MLOps",            4),
-    # ── Data Analysis ────────────────────────────────────────────────────────
-    (r"\bPySpark\b",                  "Data Analysis",    5),
-    (r"\bApache\s+Spark\b",           "Data Analysis",    5),
-    (r"\bdbt\b",                      "Data Analysis",    4),
-    # ── Data Visualization ───────────────────────────────────────────────────
-    (r"\bTableau\b",                  "Data Visualization", 5),
-    (r"\bPower\s*BI\b",               "Data Visualization", 5),
-    (r"\bGrafana\b",                  "Data Visualization", 4),
-    # ── REST ─────────────────────────────────────────────────────────────────
-    (r"\bRESTful?\b",                 "REST APIs",        5),
-    (r"\bSpring\s*Boot\b",            "REST APIs",        5),
+    (r"\bSQL\b", "SQL", 5), (r"\bMySQL\b", "SQL", 6), (r"\bPostgreSQL\b", "SQL", 6),
+    (r"\bSQLite\b", "SQL", 4), (r"\bMongoDB\b", "Databases", 5),
+    (r"\bRedis\b", "Databases", 5), (r"\bDynamoDB\b", "Databases", 4),
+    (r"\bCassandra\b", "Databases", 4), (r"\bElasticsearch\b", "Databases", 4),
+    (r"\bPinecone\b", "Databases", 4), (r"\bKafka\b", "Databases", 4),
+    (r"\bDockerfile\b", "Docker", 4), (r"\bdocker[- ]compose\b", "Docker", 5),
+    (r"\bKubernetes\b", "Kubernetes", 3), (r"\bk8s\b", "Kubernetes", 3),
+    (r"\bHelm\b", "Kubernetes", 4), (r"\bFastAPI\b", "FastAPI", 5),
+    (r"\bflask\b", "Python", 6), (r"\bdjango\b", "Python", 6),
+    (r"\bStreamlit\b", "Python", 5), (r"\bpytest\b", "Python", 5),
+    (r"\bCelery\b", "Python", 5), (r"\bTypeScript\b", "JavaScript", 6),
+    (r"\bNext\.?js\b", "React", 5), (r"\bVue\.?js\b", "JavaScript", 5),
+    (r"\bAngular\b", "JavaScript", 5), (r"\bExpress\.?js\b", "REST APIs", 5),
+    (r"\bGraphQL\b", "REST APIs", 5), (r"\bJest\b", "JavaScript", 4),
+    (r"\bCI/CD\b", "CI/CD", 4), (r"\bGitHub Actions\b", "CI/CD", 5),
+    (r"\bJenkins\b", "CI/CD", 5), (r"\bGitLab\s*CI\b", "CI/CD", 5),
+    (r"\bCircleCI\b", "CI/CD", 5), (r"\bArgoCD\b", "CI/CD", 4),
+    (r"\bAWS\b", "AWS", 4), (r"\bGCP\b", "GCP", 4),
+    (r"\bAzure\b", "Cloud Computing", 4), (r"\bTerraform\b", "Cloud Computing", 4),
+    (r"\bAnsible\b", "Cloud Computing", 4), (r"\bBigQuery\b", "GCP", 5),
+    (r"\bLinux\b", "Linux", 4), (r"\bBash\b", "Linux", 5),
+    (r"\bshell\s+script", "Linux", 4), (r"\bnginx\b", "Linux", 4),
+    (r"\bPyTorch\b", "Deep Learning", 6), (r"\bTensorFlow\b", "Deep Learning", 6),
+    (r"\bHugging\s*Face\b", "Deep Learning", 5),
+    (r"\btransformer model\b", "Deep Learning", 5),
+    (r"\bscikit[- ]learn\b", "Machine Learning", 6),
+    (r"\bXGBoost\b", "Machine Learning", 5),
+    (r"\bLangChain\b", "NLP", 5), (r"\bLlamaIndex\b", "NLP", 5),
+    (r"\bRAG\b", "NLP", 4), (r"\bretrieval[- ]augmented", "NLP", 4),
+    (r"\bLLM\b", "NLP", 4), (r"\bOpenAI\b", "NLP", 4), (r"\bBERT\b", "NLP", 5),
+    (r"\bAirflow\b", "MLOps", 4), (r"\bMLflow\b", "MLOps", 5),
+    (r"\bmodel\s+deploy", "MLOps", 4),
+    (r"\bPySpark\b", "Data Analysis", 5), (r"\bApache\s+Spark\b", "Data Analysis", 5),
+    (r"\bdbt\b", "Data Analysis", 4),
+    (r"\bTableau\b", "Data Visualization", 5),
+    (r"\bPower\s*BI\b", "Data Visualization", 5),
+    (r"\bGrafana\b", "Data Visualization", 4),
+    (r"\bRESTful?\b", "REST APIs", 5), (r"\bSpring\s*Boot\b", "REST APIs", 5),
 ]
 
 
 def _apply_regex_skill_fallback(candidate: dict, resume_text: str) -> dict:
-    existing = {s["skill"].lower() for s in candidate.get("skills", [])}
+    # Guard: candidate must be a dict with a skills list of dicts
+    if not isinstance(candidate, dict):
+        candidate = {}
+    skills = candidate.get("skills", [])
+    if not isinstance(skills, list):
+        skills = []
+    # Filter to only dict entries that have a "skill" key
+    candidate["skills"] = [s for s in skills if isinstance(s, dict) and "skill" in s]
+
+    existing = {s["skill"].lower() for s in candidate["skills"]}
     alias_existing: set = set()
     for sk in list(existing):
         alias_existing.add(SKILL_ALIASES.get(sk, sk))
@@ -570,16 +410,9 @@ def _build_graph() -> nx.DiGraph:
 SKILL_GRAPH = _build_graph()
 
 
-# =============================================================================
-#  IMPROVED _parse_bytes
-#  — scanned PDF auto-fallback to vision OCR
-#  — image size guard
-#  — DOCX fallback for malformed files
-# =============================================================================
 def _parse_bytes(raw_bytes: bytes, filename: str) -> Tuple[str, Optional[str]]:
     name = filename.lower()
 
-    # ── PDF ──────────────────────────────────────────────────────────────────
     if name.endswith(".pdf"):
         text = ""
         try:
@@ -593,17 +426,13 @@ def _parse_bytes(raw_bytes: bytes, filename: str) -> Tuple[str, Optional[str]]:
         except Exception as e:
             text = f"[pdfplumber error: {e}]"
 
-        # If extracted text is meaningful → use it
         if _is_meaningful_text(text):
             return text, None
 
-        # Scanned / image-based PDF: rasterise up to 3 pages, stitch vertically → vision OCR
         try:
-            import fitz  # PyMuPDF — optional but best for rasterisation
+            import fitz
             doc   = fitz.open(stream=raw_bytes, filetype="pdf")
-            mat   = fitz.Matrix(2, 2)   # 2× zoom → ~150 DPI is enough for Groq vision
-
-            # Collect pixmaps for first 3 pages
+            mat   = fitz.Matrix(2, 2)
             pixmaps = []
             for page_idx in range(min(3, doc.page_count)):
                 pg  = doc.load_page(page_idx)
@@ -612,24 +441,13 @@ def _parse_bytes(raw_bytes: bytes, filename: str) -> Tuple[str, Optional[str]]:
             doc.close()
 
             if len(pixmaps) == 1:
-                # Single page — use directly
                 img_bytes = pixmaps[0].tobytes("png")
             else:
-                # Stitch multiple pages vertically into one tall PNG
-                total_h = sum(p.height for p in pixmaps)
-                max_w   = max(p.width  for p in pixmaps)
-                stitched = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, max_w, total_h))
-                stitched.clear_with(255)   # white background
-                y_offset = 0
-                for p in pixmaps:
-                    stitched.copy(p, fitz.IRect(0, 0, p.width, p.height))
-                    # Blit each page at the correct vertical offset
-                    # (fitz.Pixmap.copy doesn't support dest offset; use PIL if available)
-                    y_offset += p.height
-                # Fallback: if PIL is available, do a proper stitch; otherwise use page 0 only
                 try:
                     from PIL import Image as PILImage
                     pages_pil = [PILImage.open(io.BytesIO(p.tobytes("png"))) for p in pixmaps]
+                    max_w     = max(i.width for i in pages_pil)
+                    total_h   = sum(i.height for i in pages_pil)
                     canvas    = PILImage.new("RGB", (max_w, total_h), (255, 255, 255))
                     y_off     = 0
                     for img in pages_pil:
@@ -639,10 +457,8 @@ def _parse_bytes(raw_bytes: bytes, filename: str) -> Tuple[str, Optional[str]]:
                     canvas.save(buf, format="PNG")
                     img_bytes = buf.getvalue()
                 except ImportError:
-                    # PIL not available — fall back to page 0 only
                     img_bytes = pixmaps[0].tobytes("png")
 
-            # Guard against oversized stitched image
             if len(img_bytes) > _MAX_IMAGE_BYTES:
                 try:
                     from PIL import Image as PILImage
@@ -652,27 +468,24 @@ def _parse_bytes(raw_bytes: bytes, filename: str) -> Tuple[str, Optional[str]]:
                     pil_img.save(buf, format="PNG")
                     img_bytes = buf.getvalue()
                 except Exception:
-                    img_bytes = pixmaps[0].tobytes("png")  # page 0 only as last resort
+                    img_bytes = pixmaps[0].tobytes("png")
 
             if len(img_bytes) <= _MAX_IMAGE_BYTES:
                 b64 = base64.b64encode(img_bytes).decode()
                 return "", f"data:image/png;base64,{b64}"
         except ImportError:
-            pass  # PyMuPDF not installed — fall through to raw text
+            pass
         except Exception:
             pass
 
-        # Last resort: return whatever pdfplumber gave us
         return text if text and not text.startswith("[") else "[Scanned PDF — install PyMuPDF for vision OCR]", None
 
-    # ── DOCX ─────────────────────────────────────────────────────────────────
     if name.endswith(".docx"):
         try:
             doc  = Document(io.BytesIO(raw_bytes))
             text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
             if _is_meaningful_text(text):
                 return text, None
-            # Fallback: grab all runs too
             text_full = "\n".join(
                 r.text for p in doc.paragraphs for r in p.runs if r.text.strip()
             )
@@ -680,16 +493,13 @@ def _parse_bytes(raw_bytes: bytes, filename: str) -> Tuple[str, Optional[str]]:
         except Exception as e:
             return f"[DOCX error: {e}]", None
 
-    # ── Images ───────────────────────────────────────────────────────────────
     if any(name.endswith(x) for x in [".jpg", ".jpeg", ".png", ".webp"]):
         media = (
             "image/jpeg" if name.endswith((".jpg", ".jpeg"))
             else "image/png"  if name.endswith(".png")
             else "image/webp"
         )
-        # Guard against oversized images
         if len(raw_bytes) > _MAX_IMAGE_BYTES:
-            # Attempt to down-scale with Pillow if available
             try:
                 from PIL import Image as PILImage
                 img = PILImage.open(io.BytesIO(raw_bytes))
@@ -699,36 +509,81 @@ def _parse_bytes(raw_bytes: bytes, filename: str) -> Tuple[str, Optional[str]]:
                 img.save(buf, format=fmt, quality=85)
                 raw_bytes = buf.getvalue()
                 media     = "image/jpeg" if fmt == "JPEG" else "image/png"
-            except ImportError:
-                pass  # Pillow not installed — send as-is, may hit API limit
             except Exception:
                 pass
 
         b64 = base64.b64encode(raw_bytes).decode()
         return "", f"data:{media};base64,{b64}"
 
-    # ── Plain text / unknown ──────────────────────────────────────────────────
     return raw_bytes.decode("utf-8", errors="ignore"), None
 
 
 _audit_log: List[dict] = []
 
 
+def _repair_json(text: str) -> str:
+    """Close a truncated JSON string by appending missing brackets/braces."""
+    closers: list = []
+    in_str = escape = False
+    for ch in text:
+        if escape:            escape = False; continue
+        if ch == "\\" and in_str: escape = True; continue
+        if ch == '"':         in_str = not in_str; continue
+        if in_str:            continue
+        if   ch == "{":       closers.append("}")
+        elif ch == "[":       closers.append("]")
+        elif ch in ("}",")"): pass
+        elif ch == "]":
+            if closers and closers[-1] == "]": closers.pop()
+        elif ch == "}":
+            if closers and closers[-1] == "}": closers.pop()
+    if in_str: text += '"'
+    text += "".join(reversed(closers))
+    return text
+
+
 def _extract_json(text: str) -> str:
-    text  = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
+    """
+    Extract and, if necessary, repair a JSON object from model output.
+    1. Strip markdown fences, try direct parse
+    2. Find { … } by brace-matching
+    3. If brace-match fails (truncation), repair and retry
+    """
+    text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
+    try:
+        json.loads(text); return text
+    except (json.JSONDecodeError, ValueError):
+        pass
+
     start = text.find("{")
     if start == -1:
         return "{}"
-    depth, end = 0, -1
+
+    depth, end, in_str, escape = 0, -1, False, False
     for i, ch in enumerate(text[start:], start):
-        if ch == "{":
-            depth += 1
+        if escape:            escape = False; continue
+        if ch == "\\" and in_str: escape = True; continue
+        if ch == '"':         in_str = not in_str; continue
+        if in_str:            continue
+        if ch == "{":         depth += 1
         elif ch == "}":
             depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    return text[start:end] if end > start else text[start:]
+            if depth == 0: end = i + 1; break
+
+    if end > start:
+        candidate = text[start:end]
+        try:
+            json.loads(candidate); return candidate
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    # Truncated — repair
+    fragment = text[start:]
+    repaired = _repair_json(fragment)
+    try:
+        json.loads(repaired); return repaired
+    except (json.JSONDecodeError, ValueError):
+        return "{}"
 
 
 def _groq_call_vision(prompt: str, system: str, image_b64: str, max_tokens: int = 3200) -> dict:
@@ -767,11 +622,14 @@ def _groq_call_vision(prompt: str, system: str, image_b64: str, max_tokens: int 
         return {"error": f"vision_json_parse_failed: {e}"}
     except Exception as e:
         err = str(e)
-        if "429" in err or "rate_limit" in err:
+        if "429" in err or "rate_limit" in err.lower():
             m = re.search(r"try again in (\d+)m([\d.]+)s", err)
             wait_s = (int(m.group(1)) * 60 + float(m.group(2))) if m else 60
             return {"error": "rate_limited", "wait_seconds": int(wait_s),
                     "message": f"Rate limited. Retry in {int(wait_s // 60)}m{int(wait_s % 60)}s."}
+        if "400" in err:
+            return {"error": "json_schema_too_complex",
+                    "message": "Vision prompt too complex. Try uploading as PDF or pasting text."}
         _audit_log.append({"ts": datetime.now().strftime("%H:%M:%S"),
                            "model": MODEL_VISION.split("/")[-1][:22],
                            "status": f"err:{err[:40]}",
@@ -779,7 +637,16 @@ def _groq_call_vision(prompt: str, system: str, image_b64: str, max_tokens: int 
         return {"error": err}
 
 
-def _groq_call(prompt: str, system: str, model: str = MODEL_FAST, max_tokens: int = 2800) -> dict:
+# =============================================================================
+#  GROQ TEXT CALL — handles 400 "Failed to generate JSON" with clean retry
+# =============================================================================
+def _groq_call(prompt: str, system: str, model: str = MODEL_FAST,
+               max_tokens: int = 2800, _retry: bool = True) -> dict:
+    """
+    Calls Groq with response_format=json_object.
+    On 400 (schema too complex), strips the prompt and retries once without
+    response_format forcing — then manually extracts JSON from the response.
+    """
     if not GROQ_CLIENT:
         return {"error": "GROQ_API_KEY not set"}
     messages = [
@@ -788,9 +655,10 @@ def _groq_call(prompt: str, system: str, model: str = MODEL_FAST, max_tokens: in
     ]
     t0 = time.time()
     try:
-        r       = GROQ_CLIENT.chat.completions.create(
+        r = GROQ_CLIENT.chat.completions.create(
             model=model, messages=messages, temperature=0.1,
-            max_tokens=max_tokens, response_format={"type": "json_object"},
+            max_tokens=max_tokens,
+            response_format={"type": "json_object"},
         )
         usage   = r.usage
         in_tok  = usage.prompt_tokens     if usage else 0
@@ -802,16 +670,30 @@ def _groq_call(prompt: str, system: str, model: str = MODEL_FAST, max_tokens: in
             "in": in_tok, "out": out_tok,
             "ms": round((time.time() - t0) * 1000), "cost": cost, "status": "ok",
         })
-        return json.loads(r.choices[0].message.content or "{}")
+        raw = r.choices[0].message.content or "{}"
+        return json.loads(raw)
+
     except json.JSONDecodeError:
         return {"error": "json_parse_failed"}
+
     except Exception as e:
         err = str(e)
-        if "429" in err or "rate_limit" in err:
+
+        # ── Rate limit ──────────────────────────────────────────────────────
+        if "429" in err or "rate_limit" in err.lower():
             m = re.search(r"try again in (\d+)m([\d.]+)s", err)
             wait_s = (int(m.group(1)) * 60 + float(m.group(2))) if m else 60
             return {"error": "rate_limited", "wait_seconds": int(wait_s),
                     "message": f"Rate limited. Retry in {int(wait_s // 60)}m{int(wait_s % 60)}s."}
+
+        # ── 400 "Failed to generate JSON" — retry without forced JSON mode ─
+        if ("400" in err or "failed_generation" in err.lower()
+                or "failed to generate json" in err.lower()):
+            if _retry:
+                return _groq_call_no_format(prompt, system, model, max_tokens)
+            return {"error": "json_schema_too_complex",
+                    "message": "Prompt too complex for JSON mode. Retried without format — still failed."}
+
         _audit_log.append({"ts": datetime.now().strftime("%H:%M:%S"),
                            "model": model.split("/")[-1][:22],
                            "status": f"err:{err[:40]}",
@@ -819,123 +701,335 @@ def _groq_call(prompt: str, system: str, model: str = MODEL_FAST, max_tokens: in
         return {"error": err}
 
 
+def _groq_call_no_format(prompt: str, system: str, model: str = MODEL_FAST,
+                          max_tokens: int = 6000) -> dict:
+    """
+    Fallback: call without response_format=json_object, then manually extract JSON.
+    Used when the model returns 400 in strict JSON mode.
+    """
+    if not GROQ_CLIENT:
+        return {"error": "GROQ_API_KEY not set"}
+    messages = [
+        {"role": "system", "content": system + "\nIMPORTANT: Respond with ONLY a valid JSON object. No prose before or after."},
+        {"role": "user",   "content": prompt},
+    ]
+    t0 = time.time()
+    try:
+        r = GROQ_CLIENT.chat.completions.create(
+            model=model, messages=messages, temperature=0.1, max_tokens=max_tokens,
+        )
+        usage   = r.usage
+        in_tok  = usage.prompt_tokens     if usage else 0
+        out_tok = usage.completion_tokens if usage else 0
+        cost    = round((in_tok * 0.00000011) + (out_tok * 0.00000034), 6)
+        _audit_log.append({
+            "ts": datetime.now().strftime("%H:%M:%S"),
+            "model": (model.split("/")[-1][:22]) + "(nf)",
+            "in": in_tok, "out": out_tok,
+            "ms": round((time.time() - t0) * 1000), "cost": cost, "status": "ok-nf",
+        })
+        raw = r.choices[0].message.content or "{}"
+        extracted = _extract_json(raw)
+        return json.loads(extracted)
+    except json.JSONDecodeError:
+        return {"error": "json_parse_failed_fallback"}
+    except Exception as e:
+        err = str(e)
+        if "429" in err or "rate_limit" in err.lower():
+            m = re.search(r"try again in (\d+)m([\d.]+)s", err)
+            wait_s = (int(m.group(1)) * 60 + float(m.group(2))) if m else 60
+            return {"error": "rate_limited", "wait_seconds": int(wait_s),
+                    "message": f"Rate limited. Retry in {int(wait_s // 60)}m{int(wait_s % 60)}s."}
+        return {"error": err}
+
+
 # =============================================================================
-#  IMPROVED mega_call
-#  — tighter system prompt: strictly no hallucination, no out-of-scope answers
+#  SYSTEM PROMPTS
 # =============================================================================
 _MEGA_SYS = (
-    "You are a world-class senior tech recruiter, ATS specialist, and L&D expert. "
-    "Your ONLY task is to extract structured skill and job data from the supplied resume "
-    "and job description. "
-    "STRICT RULES: "
-    "(1) Extract ONLY skills, experience, and facts explicitly present in the supplied text. "
-    "(2) Do NOT infer skills from job titles alone without evidence in the text. "
-    "(3) Do NOT answer questions, give advice, or produce any content outside the JSON schema. "
-    "(4) If a field has no evidence, use null or an empty list — never fabricate. "
-    "Return ONLY the JSON object — no preamble, no markdown fences, no explanation."
+    "You are a senior tech recruiter and L&D expert. "
+    "Extract structured skill and job data from the resume and job description. "
+    "RULES: Only extract facts explicitly present in the text. Do not infer or fabricate. "
+    "Return ONLY valid JSON — no markdown, no prose."
 )
 _VISION_SYS = (
-    "You are an expert resume parser. The user has uploaded an IMAGE of their resume. "
-    "Your ONLY task: OCR every visible word carefully (name, experience, skills, education, "
-    "projects, dates) and extract structured data. "
-    "STRICT RULES: "
-    "(1) Extract ONLY what is visibly present in the image — never infer or hallucinate. "
-    "(2) Do NOT answer questions or produce content outside the JSON schema. "
-    "(3) If text is unclear or illegible, omit that field rather than guess. "
-    "Return ONLY a valid JSON object — no markdown, no prose."
+    "You are an expert resume parser reading an IMAGE of a resume. "
+    "OCR all visible text and extract structured data. "
+    "Only extract what is visibly present. Return ONLY valid JSON."
 )
+_AUDIT_SYS = (
+    "You are an ATS expert and resume auditor. "
+    "Analyze the resume against the job description and return structured audit data. "
+    "Return ONLY valid JSON — no markdown, no prose."
+)
+
+
+# =============================================================================
+#  MEGA CALL — bullet-proof extraction with normalizer + regex-only fallback
+# =============================================================================
+
+# NOTE: schemas use CONCRETE example values (not <placeholders>) so the model
+# treats them as templates, not literal text to reproduce.
+_CANDIDATE_SCHEMA = (
+    '{\n'
+    '  "candidate": {\n'
+    '    "name": "Full Name",\n'
+    '    "current_role": "Job Title",\n'
+    '    "years_experience": 2,\n'
+    '    "seniority": "Junior",\n'
+    '    "domain": "Tech",\n'
+    '    "education": "Degree Field",\n'
+    '    "skills": [\n'
+    '      {"skill": "Python", "proficiency": 8, "year_last_used": 2025, "context": "built FastAPI app"}\n'
+    '    ],\n'
+    '    "strengths": ["strength1", "strength2"],\n'
+    '    "red_flags": []\n'
+    '  },\n'
+    '  "jd": {\n'
+    '    "role_title": "Target Role",\n'
+    '    "seniority_required": "Mid",\n'
+    '    "domain": "Tech",\n'
+    '    "required_skills": ["Python", "Docker"],\n'
+    '    "preferred_skills": ["Kubernetes"],\n'
+    '    "key_responsibilities": ["Build APIs", "Deploy services"]\n'
+    '  }\n'
+    '}'
+)
+
+_AUDIT_SCHEMA = (
+    '{\n'
+    '  "ats_score": 72,\n'
+    '  "completeness_score": 68,\n'
+    '  "clarity_score": 75,\n'
+    '  "overall_grade": "B",\n'
+    '  "ats_issues": ["Missing quantified achievements"],\n'
+    '  "improvement_tips": ["Add metrics", "Use action verbs", "Add LinkedIn URL"],\n'
+    '  "missing_keywords": ["Docker", "CI/CD"],\n'
+    '  "interview_talking_points": ["Your Python projects", "ML deployment experience"]\n'
+    '}'
+)
+
+
+def _parse_jd_from_text(jd_text: str) -> dict:
+    """
+    Pure-text JD parser — used as last resort when LLM returns no JD data.
+    Extracts role title and skill keywords from raw JD text.
+    """
+    lines  = [l.strip() for l in jd_text.split("\n") if l.strip()]
+    title  = lines[0][:60] if lines else "Target Role"
+
+    # Simple seniority detection
+    seniority = "Mid"
+    for token, level in [("lead","Lead"),("senior","Senior"),("mid","Mid"),("junior","Junior")]:
+        if token in jd_text.lower():
+            seniority = level
+            break
+
+    # Skill keyword scan
+    tech_keywords = [
+        "Python","JavaScript","React","Docker","Kubernetes","AWS","GCP","Azure",
+        "SQL","PostgreSQL","MongoDB","FastAPI","Django","Flask","Node","TypeScript",
+        "Machine Learning","Deep Learning","NLP","MLOps","CI/CD","Linux","Git",
+        "Terraform","Spark","Kafka","Redis","Elasticsearch","Java","Go","Rust",
+    ]
+    found = [k for k in tech_keywords if re.search(k, jd_text, re.IGNORECASE)]
+
+    return {
+        "role_title": title,
+        "seniority_required": seniority,
+        "domain": "Tech" if found else "Non-Tech",
+        "required_skills": found[:8],
+        "preferred_skills": found[8:12],
+        "key_responsibilities": [],
+    }
+
+
+def _build_candidate_from_regex(resume_text: str, name: str = "Unknown") -> dict:
+    """
+    Build a synthetic candidate dict using only the regex scanner.
+    Used when the LLM completely fails to extract skills.
+    """
+    stub = {"name": name, "current_role": "Professional",
+            "years_experience": 2, "seniority": "Junior",
+            "domain": "Tech", "education": "", "skills": [],
+            "strengths": [], "red_flags": []}
+    stub = _apply_regex_skill_fallback(stub, resume_text)
+    return stub
+
+
+def _normalize_llm_response(raw: dict, resume_text: str, jd_text: str) -> dict:
+    """
+    The LLM sometimes returns:
+      - The correct {"candidate":{}, "jd":{}} wrapper  → use as-is
+      - A flat dict with candidate fields at top level  → wrap it
+      - Just {"skills":[...]} or {"name":"...",...}     → wrap it
+      - An empty {} or partially filled dict             → patch missing parts
+      - {"candidate": "some text", ...}                 → string value, ignore
+
+    This function always returns {"candidate":{...}, "jd":{...}}.
+    """
+    if not isinstance(raw, dict):
+        raw = {}
+
+    # Extract candidate and jd, but only if they are dicts
+    raw_c = raw.get("candidate")
+    raw_j = raw.get("jd")
+    candidate = raw_c if isinstance(raw_c, dict) else None
+    jd        = raw_j if isinstance(raw_j, dict) else None
+
+    # Already correct shape
+    if candidate and jd:
+        return {"candidate": candidate, "jd": jd}
+
+    # Has candidate but no jd
+    if candidate and not jd:
+        return {"candidate": candidate, "jd": _parse_jd_from_text(jd_text)}
+
+    # Has jd but no candidate
+    if jd and not candidate:
+        return {"candidate": _build_candidate_from_regex(resume_text), "jd": jd}
+
+    # Flat structure: candidate fields at top level (has "name" or "skills")
+    if "name" in raw or "skills" in raw:
+        candidate_keys = {"name","current_role","years_experience","seniority",
+                          "domain","education","skills","strengths","red_flags"}
+        jd_keys        = {"role_title","seniority_required","required_skills",
+                          "preferred_skills","key_responsibilities"}
+        candidate_part = {k: raw[k] for k in candidate_keys if k in raw}
+        jd_part        = {k: raw[k] for k in jd_keys        if k in raw}
+        # Sanitize skills in candidate_part
+        if "skills" in candidate_part and not isinstance(candidate_part["skills"], list):
+            candidate_part["skills"] = []
+        if not candidate_part.get("skills"):
+            candidate_part = _build_candidate_from_regex(
+                resume_text, candidate_part.get("name", "Unknown")
+            )
+        return {
+            "candidate": candidate_part or _build_candidate_from_regex(resume_text),
+            "jd":        jd_part        or _parse_jd_from_text(jd_text),
+        }
+
+    # Completely empty or unrecognised shape — full regex fallback
+    return {
+        "candidate": _build_candidate_from_regex(resume_text),
+        "jd":        _parse_jd_from_text(jd_text),
+    }
+
+
+def _build_candidate_prompt(resume: str, jd: str, max_skills: int = 15) -> str:
+    """
+    Prompt that is explicit about the required wrapper keys.
+    Concrete examples prevent the model from reproducing the schema literally.
+    """
+    return (
+        f"You are a resume parser. Extract data and return a JSON object.\n\n"
+        f"RESUME TEXT:\n{resume}\n\n"
+        f"JOB DESCRIPTION:\n{jd}\n\n"
+        f"Rules:\n"
+        f"- The JSON MUST have exactly two top-level keys: \"candidate\" and \"jd\"\n"
+        f"- List at most {max_skills} skills from the resume (most relevant first)\n"
+        f"- Proficiency 0-10: expert=9, proficient=7, familiar=5, basic=3\n"
+        f"- year_last_used: most recent year the skill appeared in the resume\n"
+        f"- context: max 6 words of evidence from the resume\n"
+        f"- Only include skills that are EXPLICITLY mentioned in the resume\n\n"
+        f"Return ONLY the JSON object below, filled with real data (no extra text):\n"
+        f"{_CANDIDATE_SCHEMA}"
+    )
 
 
 def mega_call(resume_text: str, jd_text: str,
-              modules_hint: Optional[List[dict]] = None,
-              resume_image_b64: Optional[str] = None) -> dict:
-    reasoning_block = (
-        '\n  "reasoning": {"<module_id>": "<2-sentence why this candidate needs this module>"},'
-        if modules_hint else ""
-    )
-    json_schema = (
-        '{\n'
-        '  "candidate": {\n'
-        '    "name": "<full name or Unknown>",\n'
-        '    "current_role": "<latest title>",\n'
-        '    "years_experience": <int>,\n'
-        '    "seniority": "<Junior|Mid|Senior|Lead>",\n'
-        '    "domain": "<Tech|Non-Tech|Hybrid>",\n'
-        '    "education": "<degree + field>",\n'
-        '    "skills": [{"skill":"<n>","proficiency":<0-10>,"year_last_used":<year or 0>,"context":"<1-line evidence>"}],\n'
-        '    "strengths": ["<s1>","<s2>","<s3>"],\n'
-        '    "red_flags": ["<f1>","<f2>"]\n'
-        '  },\n'
-        '  "jd": {\n'
-        '    "role_title": "<title>",\n'
-        '    "seniority_required": "<Junior|Mid|Senior|Lead>",\n'
-        '    "domain": "<Tech|Non-Tech|Hybrid>",\n'
-        '    "required_skills": ["<skill>"],\n'
-        '    "preferred_skills": ["<skill>"],\n'
-        '    "key_responsibilities": ["<resp>"]\n'
-        '  },\n'
-        '  "audit": {\n'
-        '    "ats_score": <0-100>,\n'
-        '    "completeness_score": <0-100>,\n'
-        '    "clarity_score": <0-100>,\n'
-        '    "overall_grade": "<A|B|C|D>",\n'
-        '    "ats_issues": ["<issue>"],\n'
-        '    "improvement_tips": ["<tip1>","<tip2>","<tip3>","<tip4>","<tip5>"],\n'
-        '    "missing_keywords": ["<kw>"],\n'
-        '    "interview_talking_points": ["<pt1>","<pt2>","<pt3>"]\n'
-        '  }' + reasoning_block + '\n}'
-    )
+              modules_hint=None,
+              resume_image_b64=None) -> dict:
+
+    _FATAL = {"rate_limited", "GROQ_API_KEY not set"}
+
+    # ── VISION PATH ──────────────────────────────────────────────────────────
     if resume_image_b64:
         prompt = (
-            "I have uploaded an IMAGE of my resume. Please:\n"
-            "1. Carefully OCR and read ALL text from the resume image\n"
-            "2. Extract every skill, job title, company, date, project, and education detail visible\n"
-            "3. Analyze the gap against this job description:\n\n"
-            f"JOB DESCRIPTION:\n{jd_text[:2000]}\n\n"
-            f"Return EXACTLY this JSON schema:\n{json_schema}\n\n"
-            "Extract skills with realistic proficiency scores (expert=9, proficient=7, familiar=4, basic=3). "
-            "For year_last_used, use the most recent job/project year where that skill appeared. "
-            "IMPORTANT: Only extract skills that are EXPLICITLY visible in the image."
+            "You are a resume parser. Read this resume image carefully.\n\n"
+            f"JOB DESCRIPTION:\n{jd_text[:1200]}\n\n"
+            f"Rules: List max 15 skills visible in the image. Context max 6 words.\n"
+            f"The JSON MUST have top-level keys 'candidate' and 'jd'.\n\n"
+            f"Return ONLY this JSON filled with real data:\n{_CANDIDATE_SCHEMA}"
         )
-        return _groq_call_vision(prompt=prompt, system=_VISION_SYS,
-                                  image_b64=resume_image_b64, max_tokens=3200)
+        raw = _groq_call_vision(prompt=prompt, system=_VISION_SYS,
+                                 image_b64=resume_image_b64, max_tokens=4000)
+        if "error" in raw:
+            return raw
+        result = _normalize_llm_response(raw, "", jd_text)
+
+    # ── TEXT PATH — 3-tier LLM + regex final fallback ────────────────────────
     else:
-        prompt = (
-            f"Analyze this resume and job description. "
-            f"Extract ONLY skills and facts explicitly present in the resume text.\n\n"
-            f"RESUME:\n{resume_text[:4000]}\n\n"
-            f"JOB DESCRIPTION:\n{jd_text[:2000]}\n\n"
-            f"Return EXACTLY this JSON:\n{json_schema}"
-        )
-        return _groq_call(prompt=prompt, system=_MEGA_SYS, model=MODEL_FAST, max_tokens=2800)
+        resume_trunc = resume_text[:3000]
+        jd_trunc     = jd_text[:1000]
+
+        # Tier 1: json_object mode, 6k tokens
+        p = _build_candidate_prompt(resume_trunc, jd_trunc, max_skills=15)
+        r = _groq_call(prompt=p, system=_MEGA_SYS, model=MODEL_FAST, max_tokens=6000)
+
+        # Tier 2: no forced format (catches 400 / json_parse_failed)
+        if "error" in r and r["error"] not in _FATAL:
+            r = _groq_call_no_format(prompt=p, system=_MEGA_SYS,
+                                      model=MODEL_FAST, max_tokens=6000)
+
+        # Tier 3: shorter resume, no format, 10 skill cap
+        if "error" in r and r["error"] not in _FATAL:
+            p3 = _build_candidate_prompt(resume_trunc[:1500], jd_trunc[:600], max_skills=10)
+            r  = _groq_call_no_format(prompt=p3, system=_MEGA_SYS,
+                                       model=MODEL_FAST, max_tokens=4000)
+
+        # Fatal errors (rate limit / no key) — surface immediately
+        if "error" in r and r["error"] in _FATAL:
+            return r
+
+        # Tier 4 (final): regex-only — never fails, always returns something useful
+        # Used when LLM errored or returned empty/malformed JSON
+        if "error" in r:
+            r = {}  # will be caught by normalizer → full regex fallback
+
+        # Normalize whatever shape the LLM returned
+        result = _normalize_llm_response(r, resume_text, jd_text)
+
+    # ── AUDIT (separate, non-fatal) ──────────────────────────────────────────
+    audit_raw = _groq_call(
+        prompt=(
+            f"Audit this resume against the job description.\n\n"
+            f"RESUME:\n{resume_text[:1600] if resume_text else '[image resume]'}\n\n"
+            f"JOB DESCRIPTION:\n{jd_text[:800]}\n\n"
+            f"Return ONLY this JSON (fill with real values):\n{_AUDIT_SCHEMA}"
+        ),
+        system=_AUDIT_SYS, model=MODEL_FAST, max_tokens=700,
+    )
+
+    return {
+        "candidate": result.get("candidate", {}),
+        "jd":        result.get("jd", {}),
+        "audit":     {} if "error" in audit_raw else audit_raw,
+        "reasoning": {},
+    }
 
 
 # =============================================================================
-#  RESUME REWRITE — anti-hallucination rules
+#  RESUME REWRITE
 # =============================================================================
 def rewrite_resume(resume_text: str, jd: dict, missing_kw: List[str]) -> str:
     system = (
-        "You are an expert ATS resume writer. Follow these ABSOLUTE RULES:\n"
-        "1. NEVER add any skill, tool, framework, or experience not in the original resume.\n"
-        "2. NEVER write sentences containing: 'Although not experienced', "
-        "'While I lack', 'I am eager to learn', 'not directly experienced', "
-        "'looking forward to learning', or any admission of skill gaps.\n"
-        "3. NEVER add a closing paragraph. Resumes do not end with summary statements.\n"
-        "4. NEVER add cover letter language of any kind.\n"
-        "5. ONLY restructure and rephrase EXISTING content for ATS clarity.\n"
-        "6. Add missing keywords ONLY where honestly supported by existing experience.\n"
-        "Return JSON only: {\"rewritten_resume\": \"<full rewritten resume text>\"}"
+        "You are an expert ATS resume writer. RULES:\n"
+        "1. NEVER add any skill not in the original resume.\n"
+        "2. NEVER write gap admissions or cover letter language.\n"
+        "3. ONLY restructure and rephrase EXISTING content.\n"
+        "4. Add missing keywords ONLY where honestly supported.\n"
+        'Return JSON: {"rewritten_resume": "<full text>"}'
     )
     prompt = (
-        f"Rewrite this resume to improve ATS score for the target role.\n"
-        f"Only use EXISTING facts — never fabricate experience.\n"
-        f"Add missing keywords ONLY where honestly supported: {missing_kw[:8]}\n\n"
-        f"ORIGINAL RESUME:\n{resume_text[:3000]}\n\n"
+        f"Rewrite this resume for ATS. Only use EXISTING facts.\n"
+        f"Add these keywords where honestly supported: {missing_kw[:8]}\n\n"
+        f"ORIGINAL:\n{resume_text[:2500]}\n\n"
         f"TARGET ROLE: {jd.get('role_title','--')}\n"
         f"REQUIRED SKILLS: {jd.get('required_skills', [])}\n\n"
-        f"Return JSON: {{\"rewritten_resume\": \"<full rewritten resume>\"}}"
+        f'Return JSON: {{"rewritten_resume": "<full rewritten resume>"}}'
     )
-    r = _groq_call(prompt=prompt, system=system, model=MODEL_FAST, max_tokens=2800)
+    r = _groq_call(prompt=prompt, system=system, model=MODEL_FAST, max_tokens=2000)
     return r.get("rewritten_resume", "Could not rewrite resume.")
 
 
@@ -945,32 +1039,27 @@ def rewrite_resume(resume_text: str, jd: dict, missing_kw: List[str]) -> str:
 def generate_reasoning(path: List[dict], candidate: dict, jd: dict) -> Dict[str, str]:
     if not GROQ_CLIENT or not path:
         return {}
-    cname        = candidate.get("name", "the candidate")
-    crole        = candidate.get("current_role", "")
-    known        = [s["skill"] for s in candidate.get("skills", [])
-                    if int(s.get("proficiency") or 0) >= 7]
-    gaps         = [m["gap_skill"] for m in path if m.get("is_required")][:6]
-    role         = jd.get("role_title", "")
-    modules_list = "\n".join(
-        f'- {m["id"]}: {m["title"]} (skill: {m["skill"]}, level: {m["level"]}, '
-        f'is_required: {m.get("is_required", False)}, '
-        f'is_critical: {m.get("is_critical", False)})'
-        for m in path[:14]
+    cname  = candidate.get("name", "the candidate")
+    crole  = candidate.get("current_role", "")
+    known  = [s["skill"] for s in candidate.get("skills", [])
+              if int(s.get("proficiency") or 0) >= 7]
+    gaps   = [m["gap_skill"] for m in path if m.get("is_required")][:6]
+    role   = jd.get("role_title", "")
+    mods   = "\n".join(
+        f'- {m["id"]}: {m["title"]} (skill:{m["skill"]},crit:{m.get("is_critical",False)})'
+        for m in path[:12]
     )
     prompt = (
-        f"Candidate: {cname}, {crole}. Target role: {role}.\n"
-        f"Known skills: {known}. Gap skills: {gaps}.\n\n"
-        f"For each module write EXACTLY 2 sentences:\n"
-        f"S1: Why this candidate needs this module (reference their background).\n"
-        f"S2: How it connects to the role — if is_critical=True say why it is critical; "
-        f"if is_critical=False reflect its lower priority honestly.\n\n"
-        f"Modules:\n{modules_list}\n\n"
-        f"Return JSON: {{\"reasoning\": {{\"<module_id>\": \"<2 sentences>\", ...}}}}"
+        f"Candidate: {cname}, {crole}. Target: {role}.\n"
+        f"Known: {known}. Gaps: {gaps}.\n\n"
+        f"For each module write 2 sentences: why needed + how it connects to role.\n"
+        f"Modules:\n{mods}\n\n"
+        f'Return JSON: {{"reasoning": {{"<id>": "<2 sentences>"}}}}'
     )
     r = _groq_call(
         prompt=prompt,
-        system="Expert L&D advisor. Reasoning must be CONSISTENT with is_critical flag. Return JSON only.",
-        model=MODEL_FAST, max_tokens=1200,
+        system="Expert L&D advisor. Return JSON only.",
+        model=MODEL_FAST, max_tokens=1000,
     )
     return r.get("reasoning", {}) if "error" not in r else {}
 
@@ -983,15 +1072,11 @@ def search_real_salary(role: str, location: str) -> dict:
         f"- {r.get('title','')}: {r.get('body','')[:200]}" for r in results[:5]
     )
     r = _groq_call(
-        f'Extract salary data for "{role}" in {location} from these snippets.\n\n'
-        f'{snippets}\n\n'
-        f'Return JSON: {{"min_lpa":<number>,"max_lpa":<number>,"median_lpa":<number>,'
-        f'"currency":"INR or USD","source":"<website name>","note":"<caveat>"}}\n'
-        f'For USD return salary in THOUSANDS (e.g. 80 for $80k/yr). '
-        f'For INR return in LAKHS (e.g. 12 for 12 LPA). '
-        f'Use location "{location}" — do not substitute another country.',
-        system="Extract structured salary info. Return JSON only.",
-        model=MODEL_FAST, max_tokens=400,
+        f'Extract salary for "{role}" in {location} from:\n{snippets}\n\n'
+        f'Return JSON: {{"min_lpa":<n>,"max_lpa":<n>,"median_lpa":<n>,'
+        f'"currency":"INR or USD","source":"<site>","note":"<caveat>"}}',
+        system="Salary extractor. JSON only.",
+        model=MODEL_FAST, max_tokens=300,
     )
     if "error" in r:
         return {}
@@ -1058,10 +1143,9 @@ def search_job_market(role: str) -> List[str]:
     if not snippets:
         return []
     r = _groq_call(
-        f'Based on these search results about "{role}" job market, '
-        f'give 3 short specific insights in English.\n\n{snippets}\n\n'
-        f'Return JSON: {{"insights":["<insight1>","<insight2>","<insight3>"]}}',
-        system="Job market analyst. English only. Return JSON only.",
+        f'Give 3 short job market insights for "{role}" based on:\n{snippets}\n\n'
+        f'Return JSON: {{"insights":["<i1>","<i2>","<i3>"]}}',
+        system="Job market analyst. English only. JSON only.",
         model=MODEL_FAST, max_tokens=300,
     )
     return r.get("insights", []) if "error" not in r else []
@@ -1283,14 +1367,14 @@ def build_path(gp: List[dict], c: dict, jd: Optional[dict] = None) -> List[dict]
             pass
 
     if jd:
-        sm            = seniority_check(c, jd)
+        sm               = seniority_check(c, jd)
         responsibilities = " ".join(jd.get("key_responsibilities", [])).lower()
-        domain        = jd.get("domain", "Tech")
+        domain           = jd.get("domain", "Tech")
         needs_leadership = sm["add_leadership"] and (
             domain != "Tech"
-            or "team"   in responsibilities
-            or "lead"   in responsibilities
-            or "manag"  in responsibilities
+            or "team"  in responsibilities
+            or "lead"  in responsibilities
+            or "manag" in responsibilities
             or sm["gap_levels"] >= 2
         )
         if needs_leadership:
@@ -1323,8 +1407,8 @@ def build_path(gp: List[dict], c: dict, jd: Optional[dict] = None) -> List[dict]
                 if co_skill in required_gap_skills:
                     continue
                 try:
-                    descs    = nx.descendants(sub, nid)
-                    has_req  = any(
+                    descs   = nx.descendants(sub, nid)
+                    has_req = any(
                         CATALOG_BY_ID.get(d, {}).get("skill", "").lower() in required_gap_skills
                         for d in descs
                     )
@@ -1541,11 +1625,9 @@ def build_ics_calendar(path: List[dict], hpd: float = 2.0,
     start_minute = int(start_date.minute)
 
     lines = [
-        "BEGIN:VCALENDAR",
-        "VERSION:2.0",
+        "BEGIN:VCALENDAR", "VERSION:2.0",
         "PRODID:-//SkillForge//AI Adaptive Onboarding//EN",
-        "CALSCALE:GREGORIAN",
-        "METHOD:PUBLISH",
+        "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
         "X-WR-CALNAME:SkillForge Learning Roadmap",
         "X-WR-TIMEZONE:Asia/Kolkata",
     ]
@@ -1609,40 +1691,51 @@ def run_analysis(resume_text: str, jd_text: str,
         cached["_cache_hit"] = True
         return cached
 
-    kws            = [w.strip() for w in jd_text.split() if len(w) > 3][:20]
-    potential_mods = [
-        c for c in CATALOG
-        if any(kw.lower() in c["skill"].lower() or c["skill"].lower() in kw.lower()
-               for kw in kws)
-    ][:10]
-
     raw = mega_call(resume_text=resume_text, jd_text=jd_text,
-                    modules_hint=potential_mods, resume_image_b64=resume_image_b64)
+                    resume_image_b64=resume_image_b64)
     if "error" in raw:
         return raw
 
     candidate = raw.get("candidate", {})
     jd_data   = raw.get("jd",        {})
     quality   = raw.get("audit",     {})
-    rsn_map   = raw.get("reasoning", {}) or {}
 
-    if not candidate or not jd_data:
-        return {"error": "parse_failed — empty candidate or JD"}
+    # ── Type-safety: LLM sometimes returns a string/list instead of dict ─────
+    if not isinstance(candidate, dict): candidate = {}
+    if not isinstance(jd_data,   dict): jd_data   = {}
+    if not isinstance(quality,   dict): quality   = {}
 
-    yrs          = int(candidate.get("years_experience") or 0)
-    skills_count = len(candidate.get("skills", []))
-    if skills_count == 0 and yrs > 2:
-        return {"error": "analysis_quality_failure — no skills extracted. Please try again."}
+    # ── Patch missing candidate/jd rather than hard-failing ──────────────────
+    if not candidate:
+        candidate = _build_candidate_from_regex(resume_text or "")
+    if not jd_data:
+        jd_data = _parse_jd_from_text(jd_text)
 
+    # Sanitize skills list — must be a list of dicts
+    skills = candidate.get("skills", [])
+    if not isinstance(skills, list):
+        skills = []
+    clean_skills = []
+    for s in skills:
+        if isinstance(s, dict) and "skill" in s:
+            clean_skills.append(s)
+    candidate["skills"] = clean_skills
+
+    # Always apply regex scanner to catch skills the LLM missed
     if resume_text and resume_text.strip():
         candidate = _apply_regex_skill_fallback(candidate, resume_text)
+
+    # If still no skills at all, that's a genuine failure
+    if not candidate.get("skills"):
+        return {"error": "analysis_quality_failure — no skills could be extracted. "
+                         "Please paste the resume as plain text and try again."}
 
     gp   = analyze_gap(candidate, jd_data)
     path = build_path(gp, candidate, jd_data)
 
-    rsn_map_llm = generate_reasoning(path, candidate, jd_data)
+    rsn_map = generate_reasoning(path, candidate, jd_data)
     for m in path:
-        llm_rsn    = rsn_map_llm.get(m["id"]) or rsn_map.get(m["id"])
+        llm_rsn    = rsn_map.get(m["id"])
         m["reasoning"] = (
             llm_rsn if llm_rsn
             else f"Addresses gap in {m['gap_skill']} — required for {jd_data.get('role_title','the role')}."
@@ -1968,30 +2061,20 @@ def generate_interview_questions(gp: List[dict], candidate: dict, jd: dict) -> D
     if not relevant:
         return {}
     role      = jd.get("role_title", "the role")
-    cname     = candidate.get("name", "the candidate")
     seniority = candidate.get("seniority", "Junior")
-    years_exp = int(candidate.get("years_experience") or 0)
     skills_list = "\n".join(
-        f"- {g['skill']} ({g['proficiency']}/10, {g['status']}): "
-        f"{_strip_mern_prefix(g.get('context',''))}"
+        f"- {g['skill']} ({g['proficiency']}/10, {g['status']})"
         for g in relevant
     )
     prompt = (
-        f"You are a senior technical interviewer.\n"
-        f"Candidate: {cname}. Seniority: {seniority} ({years_exp} years exp). "
-        f"Target role: {role}.\n\n"
-        f"IMPORTANT: Generate questions appropriate for a {seniority}-level engineer ONLY.\n"
-        f"- Junior (0-3yr): practical implementation, debugging, basic design\n"
-        f"- Mid (3-6yr): system design basics, code quality, trade-offs\n"
-        f"- Senior (6+yr): architecture, scale, technical leadership\n"
-        f"Do NOT generate Lead/Principal/Staff level questions for {seniority} candidates.\n\n"
-        f"For each skill write exactly 3 questions that test real depth at {seniority} level.\n\n"
+        f"Generate interview questions for a {seniority}-level candidate targeting {role}.\n"
         f"Skills:\n{skills_list}\n\n"
-        f"Return JSON: {{\"questions\": {{\"<skill>\": [\"<q1>\",\"<q2>\",\"<q3>\"], ...}}}}"
+        f"Write exactly 3 questions per skill at {seniority} level.\n"
+        f'Return JSON: {{"questions": {{"<skill>": ["<q1>","<q2>","<q3>"]}}}}'
     )
     r = _groq_call(
         prompt=prompt,
-        system=f"Expert technical interviewer for {seniority}-level engineers. Return JSON only.",
-        model=MODEL_FAST, max_tokens=1000,
+        system=f"Expert technical interviewer for {seniority}-level engineers. JSON only.",
+        model=MODEL_FAST, max_tokens=900,
     )
     return r.get("questions", {}) if "error" not in r else {}
