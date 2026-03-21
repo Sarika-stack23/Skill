@@ -168,6 +168,8 @@ SKILL_ALIASES: Dict[str, str] = {
     "owasp": "application security", "penetration testing": "application security",
     "pen testing": "application security", "devsecops": "application security",
     "scrum": "agile", "kanban": "agile", "sprint": "agile", "jira": "agile",
+    # ── MERN ─────────────────────────────────────────────────────────────────
+    "mern": "react", "mern stack": "react",
 }
 
 MERN_IMPLIES: List[str] = ["react", "javascript", "rest apis"]
@@ -211,6 +213,24 @@ _SKILL_REGEX_MAP: List[Tuple[str, str, int]] = [
     (r"\bPower\s*BI\b", "Data Visualization", 5),
     (r"\bGrafana\b", "Data Visualization", 4),
     (r"\bRESTful?\b", "REST APIs", 5), (r"\bSpring\s*Boot\b", "REST APIs", 5),
+    # ── MERN Stack ───────────────────────────────────────────────────────────
+    (r"\bMERN\b",                     "React",           6),
+    # ── Data Science basics ──────────────────────────────────────────────────
+    (r"\bNumPy\b",                    "Data Analysis",   5),
+    (r"\bPandas\b",                   "Data Analysis",   6),
+    (r"\bMatplotlib\b",               "Data Visualization", 5),
+    # ── Languages ────────────────────────────────────────────────────────────
+    (r"\bJava\b",                     "Java",            5),
+    (r"\bRust\b",                     "Rust",            5),
+    (r"\bGo\b",                       "Go",              5),
+    # ── Vector/AI databases ──────────────────────────────────────────────────
+    (r"\bQdrant\b",                   "Databases",       5),
+    (r"\bChromaDB\b",                 "Databases",       5),
+    (r"\bSupabase\b",                 "Databases",       5),
+    # ── Misc tools ───────────────────────────────────────────────────────────
+    (r"\bGradio\b",                   "Python",          5),
+    (r"\bLLaMA\b",                    "NLP",             5),
+    (r"\bSymPy\b",                    "Python",          4),
 ]
 
 
@@ -244,6 +264,16 @@ def _apply_regex_skill_fallback(candidate: dict, resume_text: str) -> dict:
                 "context":        "Detected in resume text (regex scanner)",
             })
             existing.add(canonical)
+            # MERN expands to React + JavaScript + REST APIs
+            if skill_name == "React" and re.search(r"\bMERN\b", resume_text, re.IGNORECASE):
+                for implied_skill, implied_prof in [("JavaScript", 6), ("REST APIs", 6)]:
+                    if implied_skill.lower() not in existing:
+                        candidate["skills"].append({
+                            "skill": implied_skill, "proficiency": implied_prof,
+                            "year_last_used": CURRENT_YEAR,
+                            "context": "Derived from MERN Stack (regex scanner)",
+                        })
+                        existing.add(implied_skill.lower())
     return candidate
 
 
@@ -532,11 +562,10 @@ def _repair_json(text: str) -> str:
         if in_str:            continue
         if   ch == "{":       closers.append("}")
         elif ch == "[":       closers.append("]")
-        elif ch in ("}",")"): pass
-        elif ch == "]":
-            if closers and closers[-1] == "]": closers.pop()
         elif ch == "}":
             if closers and closers[-1] == "}": closers.pop()
+        elif ch == "]":
+            if closers and closers[-1] == "]": closers.pop()
     if in_str: text += '"'
     text += "".join(reversed(closers))
     return text
@@ -963,20 +992,20 @@ def mega_call(resume_text: str, jd_text: str,
         resume_trunc = resume_text[:3000]
         jd_trunc     = jd_text[:1000]
 
-        # Tier 1: json_object mode, 6k tokens
+        # Tier 1: json_object mode, 3500 tokens (reliable on Groq free tier)
         p = _build_candidate_prompt(resume_trunc, jd_trunc, max_skills=15)
-        r = _groq_call(prompt=p, system=_MEGA_SYS, model=MODEL_FAST, max_tokens=6000)
+        r = _groq_call(prompt=p, system=_MEGA_SYS, model=MODEL_FAST, max_tokens=3500)
 
         # Tier 2: no forced format (catches 400 / json_parse_failed)
         if "error" in r and r["error"] not in _FATAL:
             r = _groq_call_no_format(prompt=p, system=_MEGA_SYS,
-                                      model=MODEL_FAST, max_tokens=6000)
+                                      model=MODEL_FAST, max_tokens=3500)
 
         # Tier 3: shorter resume, no format, 10 skill cap
         if "error" in r and r["error"] not in _FATAL:
             p3 = _build_candidate_prompt(resume_trunc[:1500], jd_trunc[:600], max_skills=10)
             r  = _groq_call_no_format(prompt=p3, system=_MEGA_SYS,
-                                       model=MODEL_FAST, max_tokens=4000)
+                                       model=MODEL_FAST, max_tokens=2500)
 
         # Fatal errors (rate limit / no key) — surface immediately
         if "error" in r and r["error"] in _FATAL:
@@ -990,7 +1019,8 @@ def mega_call(resume_text: str, jd_text: str,
         # Normalize whatever shape the LLM returned
         result = _normalize_llm_response(r, resume_text, jd_text)
 
-    # ── AUDIT (separate, non-fatal) ──────────────────────────────────────────
+    # ── AUDIT (separate, non-fatal — small delay prevents rate limit burst) ──
+    time.sleep(0.5)
     audit_raw = _groq_call(
         prompt=(
             f"Audit this resume against the job description.\n\n"
@@ -998,7 +1028,7 @@ def mega_call(resume_text: str, jd_text: str,
             f"JOB DESCRIPTION:\n{jd_text[:800]}\n\n"
             f"Return ONLY this JSON (fill with real values):\n{_AUDIT_SCHEMA}"
         ),
-        system=_AUDIT_SYS, model=MODEL_FAST, max_tokens=700,
+        system=_AUDIT_SYS, model=MODEL_FAST, max_tokens=600,
     )
 
     return {
@@ -1052,9 +1082,12 @@ def generate_reasoning(path: List[dict], candidate: dict, jd: dict) -> Dict[str,
     prompt = (
         f"Candidate: {cname}, {crole}. Target: {role}.\n"
         f"Known: {known}. Gaps: {gaps}.\n\n"
-        f"For each module write 2 sentences: why needed + how it connects to role.\n"
+        f"For each module below, write exactly 2 sentences:\n"
+        f"  Sentence 1: Why this candidate specifically needs it (reference their background).\n"
+        f"  Sentence 2: How completing it moves them toward the target role.\n\n"
         f"Modules:\n{mods}\n\n"
-        f'Return JSON: {{"reasoning": {{"<id>": "<2 sentences>"}}}}'
+        f"Return JSON like this example:\n"
+        f'{{"reasoning": {{"PY01": "Candidate has basic Python from projects. Intermediate OOP is required to build production FastAPI services for this role.", "DO02": "No Docker experience found. Containerization is mandatory for deployment in this role."}}}}'
     )
     r = _groq_call(
         prompt=prompt,
@@ -2067,10 +2100,12 @@ def generate_interview_questions(gp: List[dict], candidate: dict, jd: dict) -> D
         for g in relevant
     )
     prompt = (
-        f"Generate interview questions for a {seniority}-level candidate targeting {role}.\n"
-        f"Skills:\n{skills_list}\n\n"
-        f"Write exactly 3 questions per skill at {seniority} level.\n"
-        f'Return JSON: {{"questions": {{"<skill>": ["<q1>","<q2>","<q3>"]}}}}'
+        f"Generate interview questions for a {seniority}-level candidate targeting {role}.\n\n"
+        f"Skills to cover:\n{skills_list}\n\n"
+        f"Write exactly 3 questions per skill, calibrated to {seniority} level.\n"
+        f"Questions should test real depth — practical, specific, not generic.\n\n"
+        f"Return JSON like this example (use actual skill names as keys, not placeholders):\n"
+        f'{{"questions": {{"Python": ["Explain how Python\'s GIL affects multithreaded code.", "How would you optimize a slow pandas DataFrame operation?", "What is the difference between __init__ and __new__?"], "SQL": ["Write a query to find the second highest salary.", "When would you use a CTE vs a subquery?", "Explain the difference between INNER JOIN and LEFT JOIN."]}}}}'
     )
     r = _groq_call(
         prompt=prompt,
