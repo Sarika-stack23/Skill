@@ -519,15 +519,29 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-xfer-desc      { font-size:0.72rem; color:var(--t3); margin-top:2px; }
 
 /* ── LOADING ── */
-.sf-lstep        { display:flex; align-items:flex-start; gap:14px; padding:12px 16px; border-radius:8px; margin-bottom:6px; font-size:0.85rem; }
-.sf-lstep-done   { background:rgba(74,222,128,0.05);  border:1px solid rgba(74,222,128,0.15); }
+.sf-loading-wrap {
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  min-height:calc(100vh - 52px); padding:0 20px;
+}
+.sf-loading-box {
+  width:100%; max-width:480px;
+  background:var(--s1); border:1px solid var(--border);
+  border-radius:16px; padding:32px;
+}
+.sf-loading-title {
+  font-family:var(--mono); font-size:0.62rem; letter-spacing:0.14em;
+  text-transform:uppercase; color:var(--teal); margin-bottom:24px; text-align:center;
+  display:flex; align-items:center; justify-content:center; gap:8px;
+}
+.sf-lstep        { display:flex; align-items:flex-start; gap:12px; padding:10px 14px; border-radius:7px; margin-bottom:5px; font-size:0.84rem; }
+.sf-lstep-done   { background:rgba(74,222,128,0.05);  border:1px solid rgba(74,222,128,0.12); }
 .sf-lstep-active { background:rgba(45,212,191,0.07);  border:1px solid var(--bhi); }
-.sf-lstep-wait   { background:var(--s1); border:1px solid var(--border); opacity:0.45; }
-.sf-lstep-icon   { font-family:var(--mono); font-size:1rem; min-width:24px; text-align:center; margin-top:1px; }
+.sf-lstep-wait   { background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.04); opacity:0.5; }
+.sf-lstep-icon   { font-family:var(--mono); font-size:0.95rem; min-width:22px; text-align:center; margin-top:1px; }
 .sf-lstep-spin   { display:inline-block; animation:spin 1.2s linear infinite; }
-.sf-lstep-title  { font-weight:600; color:var(--t1); margin-bottom:2px; }
-.sf-lstep-sub    { font-family:var(--mono); font-size:0.65rem; color:var(--t3); }
-.sf-lprog      { height:4px; background:rgba(255,255,255,0.05); border-radius:99px; overflow:hidden; margin:16px 0 24px; max-width:560px; }
+.sf-lstep-title  { font-weight:600; color:var(--t1); margin-bottom:1px; font-size:0.84rem; }
+.sf-lstep-sub    { font-family:var(--mono); font-size:0.62rem; color:var(--t3); }
+.sf-lprog      { height:3px; background:rgba(255,255,255,0.05); border-radius:99px; overflow:hidden; margin:20px 0 0; }
 .sf-lprog-fill { height:100%; border-radius:99px; background:linear-gradient(90deg,var(--teal),var(--green)); transition:width 0.6s ease; }
 
 /* ── MISC ── */
@@ -564,12 +578,53 @@ textarea::placeholder { color:var(--t4)!important; }
 /* B5 fix — thicker ATS bar */
 .sf-prog { height:6px; }
 
+/* ── DEMO SECTION — style the right-column area ── */
+.sf-demo-header {
+  font-family:var(--mono); font-size:0.6rem; letter-spacing:0.12em;
+  text-transform:uppercase; color:var(--t3); text-align:center;
+  padding:10px 0 14px; margin-bottom:4px;
+}
+.sf-demo-tag {
+  font-family:var(--mono); font-size:0.6rem; color:var(--t4);
+  text-align:left; padding:0 4px 10px; line-height:1.3;
+}
+/* Style secondary buttons in demo context to look like cards */
+.sf-demo-col .stButton > button {
+  background:var(--s2)!important; border:1px solid var(--border)!important;
+  color:var(--t1)!important; font-weight:600!important; font-size:0.88rem!important;
+  text-align:left!important; padding:14px 18px!important; height:auto!important;
+  border-radius:10px!important; letter-spacing:-0.01em!important;
+  transition:all 0.15s!important;
+}
+.sf-demo-col .stButton > button:hover {
+  border-color:rgba(45,212,191,0.4)!important;
+  background:rgba(45,212,191,0.05)!important;
+  color:var(--t1)!important;
+}
+/* Upload cards — use border on Streamlit tab container */
+.sf-upload-col [data-testid="stTabs"] {
+  background:var(--s1); border:1px solid var(--border);
+  border-radius:12px; padding:16px;
+}
+/* Tab content spacing */
+[data-testid="stTabContent"] { padding:0!important; }
+/* Remove Streamlit's default column gap issues */
+[data-testid="column"] { padding-left:8px!important; padding-right:8px!important; }
+
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 @keyframes spin  { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
 </style>
 """
 
-GAP_KILLER = '<style>div[data-testid="stAppViewBlockContainer"]{padding-top:0!important}section.main{padding-top:0!important}.block-container{padding-top:0!important}.stMainBlockContainer{padding-top:0!important}</style>'
+GAP_KILLER = '''<style>
+div[data-testid="stAppViewBlockContainer"]{padding-top:0!important}
+section.main{padding-top:0!important}
+.block-container{padding-top:0!important}
+.stMainBlockContainer{padding-top:0!important}
+[data-testid="stVerticalBlock"] > [data-testid="stVerticalBlock"] { gap:0!important; }
+.stColumn { padding:0 6px!important; }
+[data-testid="stHorizontalBlock"] { gap:0!important; }
+</style>'''
 
 # =============================================================================
 #  SESSION STATE
@@ -627,9 +682,9 @@ def render_topbar(is_image_resume: bool = False) -> None:
 #  INPUT PAGE — clean professional redesign
 # =============================================================================
 def render_input() -> None:
-    st.markdown('<div class="sf-page" style="padding:0 40px 60px">', unsafe_allow_html=True)
+    st.markdown('<div class="sf-page" style="padding:0 32px 60px">', unsafe_allow_html=True)
 
-    # ── HERO: 2-column layout ──
+    # ── HERO: 2-column split ──
     hero_l, hero_r = st.columns([11, 9], gap="large")
 
     with hero_l:
@@ -648,24 +703,26 @@ def render_input() -> None:
         </div>""", unsafe_allow_html=True)
 
     with hero_r:
-        # Demo cards panel
-        st.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:24px"></div>', unsafe_allow_html=True)
+        # Demo panel — styled header + proper card-look buttons
         st.markdown("""
-        <div class="sf-demo-panel">
-          <div class="sf-demo-hd">Try a demo — instant results</div>
+        <div style="background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:20px 20px 8px">
+          <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;
+               color:var(--t3);text-align:center;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+            <span style="flex:1;height:1px;background:var(--border)"></span>
+            ⚡ Try a demo
+            <span style="flex:1;height:1px;background:var(--border)"></span>
+          </div>
         </div>""", unsafe_allow_html=True)
 
         sample_meta = {
-            "junior_swe": ("💻", "TECH", "Junior SWE → Mid Full Stack", "Python · React · Docker · AWS"),
-            "senior_ds":  ("🧠", "DATA / AI", "Senior DS → Lead AI", "ML · NLP · MLOps · Leadership"),
-            "hr_manager": ("👔", "NON-TECH", "HR Coordinator → Manager", "HR · L&D · Employee Relations"),
+            "junior_swe": ("💻", "Junior SWE → Mid Full Stack", "TECH · Python · React · Docker · AWS"),
+            "senior_ds":  ("🧠", "Senior DS → Lead AI",        "AI · ML · NLP · MLOps · Leadership"),
+            "hr_manager": ("👔", "HR Coordinator → Manager",   "NON-TECH · L&D · Employee Relations"),
         }
-        for key, (icon, label, title, tags) in sample_meta.items():
-            clicked = st.button(
-                f"{icon}  {title}",
-                key=f"pre_{key}", use_container_width=True, type="secondary",
-            )
-            if clicked:
+        st.markdown('<div class="sf-demo-col">', unsafe_allow_html=True)
+        for key, (icon, title, tags) in sample_meta.items():
+            if st.button(f"{icon}  {title}", key=f"pre_{key}", use_container_width=True):
                 for wk in _RESET_KEYS:
                     st.session_state.pop(wk, None)
                 st.session_state["resume_text"]    = SAMPLES[key]["resume"]
@@ -675,11 +732,13 @@ def render_input() -> None:
                 st.rerun()
             st.markdown(
                 f'<div style="font-family:var(--mono);font-size:0.6rem;color:var(--t4);'
-                f'margin:-6px 0 8px 4px">{label} · {tags}</div>',
+                f'margin:-4px 4px 10px;padding-left:2px">{tags}</div>',
                 unsafe_allow_html=True,
             )
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
 
-    # ── HOW IT WORKS ── compact bar
+    # ── HOW IT WORKS — compact 3-step bar ──
     st.markdown("""
     <div class="sf-how">
       <div class="sf-how-step">
@@ -706,11 +765,11 @@ def render_input() -> None:
       <div class="sf-stat-div"></div>
       <div class="sf-stat"><span class="sf-stat-n">6</span><span class="sf-stat-l">Domains</span></div>
       <div class="sf-stat-div"></div>
-      <div class="sf-stat"><span class="sf-stat-n">3</span><span class="sf-stat-l">Demo Scenarios</span></div>
+      <div class="sf-stat"><span class="sf-stat-n">3</span><span class="sf-stat-l">Demos</span></div>
       <div class="sf-stat-div"></div>
       <div class="sf-stat"><span class="sf-stat-n">0</span><span class="sf-stat-l">Hallucinations</span></div>
       <div class="sf-stat-div"></div>
-      <div class="sf-stat"><span class="sf-stat-n">LLaMA 3.3</span><span class="sf-stat-l">LLM Engine</span></div>
+      <div class="sf-stat"><span class="sf-stat-n" style="font-size:1rem;padding-top:4px">LLaMA 3.3</span><span class="sf-stat-l">LLM Engine</span></div>
     </div>""", unsafe_allow_html=True)
 
     # ── UPLOAD PANELS ──
@@ -720,8 +779,11 @@ def render_input() -> None:
         src_flag   = st.session_state.get("_resume_source", "")
         has_resume = bool(st.session_state.get("resume_text", "").strip() or st.session_state.get("resume_image"))
         badge      = '<span class="sf-ready-badge">✓ Ready</span>' if has_resume else ''
-        st.markdown(f'<div class="sf-upload-card">', unsafe_allow_html=True)
-        st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">📄</span> Resume {badge}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="background:var(--s1);border:1px solid {"rgba(45,212,191,0.3)" if has_resume else "var(--border)"};'
+            f'border-radius:12px;padding:18px 20px 0">'
+            f'<div class="sf-panel-hd"><span style="font-size:0.9rem">📄</span> Resume {badge}</div>'
+            f'</div>', unsafe_allow_html=True)
 
         up_tab, paste_tab = st.tabs(["Upload file", "Paste text"])
         with up_tab:
@@ -778,20 +840,22 @@ def render_input() -> None:
 
         if has_resume and src_flag == "file":
             st.markdown('<div class="sf-ghost" style="margin-top:6px">', unsafe_allow_html=True)
-            if st.button("Clear resume", key="clr_res"):
+            if st.button("✕ Clear resume", key="clr_res"):
                 for k in ["resume_text","resume_image","res_paste","_resume_source",
                            "_resume_fname","_resume_hash","result","rw_result"]:
                     st.session_state.pop(k, None)
                 _init_state()
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
 
     with right:
         has_jd   = bool(st.session_state.get("jd_text", "").strip())
         badge_jd = '<span class="sf-ready-badge">✓ Ready</span>' if has_jd else ''
-        st.markdown(f'<div class="sf-upload-card">', unsafe_allow_html=True)
-        st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">💼</span> Job Description {badge_jd}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="background:var(--s1);border:1px solid {"rgba(45,212,191,0.3)" if has_jd else "var(--border)"};'
+            f'border-radius:12px;padding:18px 20px 0">'
+            f'<div class="sf-panel-hd"><span style="font-size:0.9rem">💼</span> Job Description {badge_jd}</div>'
+            f'</div>', unsafe_allow_html=True)
 
         jup_tab, jpaste_tab = st.tabs(["Upload file", "Paste text"])
         with jup_tab:
@@ -822,18 +886,16 @@ def render_input() -> None:
                 if len(jp.split()) > 5:
                     st.markdown(f'<div class="sf-wc">{len(jp.split())} words</div>', unsafe_allow_html=True)
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
     # ── BOTTOM ACTION BAR ──
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-    opt1, opt2_col, btn_col = st.columns([1.2, 1.2, 2.4])
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    opt1, opt2_col, btn_col = st.columns([1.4, 1.4, 2.2])
     with opt1:
         cur_loc = st.session_state.get("sal_location", "India")
         idx_loc = _LOC_OPTS.index(cur_loc) if cur_loc in _LOC_OPTS else 0
-        st.selectbox("Salary location", _LOC_OPTS, index=idx_loc, key="sal_location", label_visibility="visible")
+        st.selectbox("Salary location", _LOC_OPTS, index=idx_loc, key="sal_location")
     with opt2_col:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        with st.expander("⚙ Advanced"):
+        with st.expander("⚙ Advanced options"):
             st.checkbox("Force fresh (skip cache)", key="force_fresh")
     with btn_col:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
@@ -841,7 +903,7 @@ def render_input() -> None:
         jd_ready     = bool(st.session_state.get("jd_text","").strip())
         if resume_ready and jd_ready:
             is_img = bool(st.session_state.get("resume_image"))
-            lbl    = "⚡ Analyze image resume" if is_img else "⚡ Analyze skill gap"
+            lbl    = "⚡  Analyze image resume" if is_img else "⚡  Analyze skill gap →"
             if st.button(lbl, key="go_btn", use_container_width=True):
                 st.session_state["step"] = "analyzing"
                 st.rerun()
@@ -850,32 +912,31 @@ def render_input() -> None:
             st.markdown(
                 f'<div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;'
                 f'padding:10px 16px;font-family:var(--mono);font-size:0.72rem;color:var(--t3);text-align:center">'
-                f'Add {" + ".join(missing)} to continue →</div>',
+                f'Add {" + ".join(missing)} to continue</div>',
                 unsafe_allow_html=True,
             )
     st.markdown("</div>", unsafe_allow_html=True)
 
 # =============================================================================
-#  LOADING
+#  LOADING — centered card, no dead space
 # =============================================================================
 def render_loading() -> None:
-    st.markdown('<div style="padding:20px 40px 80px">', unsafe_allow_html=True)
-    st.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
-
     resume_text = st.session_state.get("resume_text", "")
     resume_img  = st.session_state.get("resume_image")
     jd_text     = st.session_state.get("jd_text", "") or st.session_state.get("jd_paste", "")
     source      = st.session_state.get("_resume_source", "paste")
 
     if not resume_text.strip() and not resume_img:
+        st.markdown('<div style="padding:40px">', unsafe_allow_html=True)
         st.error("No resume data. Please go back.")
-        if st.button("Go back", key="back_no_resume"):
+        if st.button("← Go back", key="back_no_resume"):
             st.session_state["step"] = "input"; st.rerun()
         st.markdown("</div>", unsafe_allow_html=True); return
 
     if not jd_text.strip():
+        st.markdown('<div style="padding:40px">', unsafe_allow_html=True)
         st.error("No job description. Please go back.")
-        if st.button("Go back", key="back_no_jd"):
+        if st.button("← Go back", key="back_no_jd"):
             st.session_state["step"] = "input"; st.rerun()
         st.markdown("</div>", unsafe_allow_html=True); return
 
@@ -884,51 +945,67 @@ def render_loading() -> None:
         st.session_state.pop("force_fresh", None)
 
     steps = [
-        ("📄", "Parsing resume & job description",   "Extracting text, structure, metadata"),
-        ("🔍", "Extracting skills with proficiency", "Scoring 0-10 per skill + regex fallback"),
-        ("🧩", "Computing skill gap",                "Known, Partial, Missing classification"),
-        ("🗺", "Building dependency roadmap",        "NetworkX DAG, topological sort"),
-        ("🌐", "Fetching live market data",          "Salary, trends, job market"),
+        ("📄", "Parsing resume & JD",              "Extracting text, structure, metadata"),
+        ("🔍", "Extracting skills",                 "Scoring 0–10 per skill + regex fallback"),
+        ("🧩", "Computing skill gap",               "Known · Partial · Missing classification"),
+        ("🗺", "Building dependency roadmap",       "NetworkX DAG, topological sort"),
+        ("🌐", "Fetching live market data",         "Salary, trends, job market"),
     ]
-    st.markdown('<div style="max-width:560px;margin:60px auto 0"><div style="font-family:var(--mono);font-size:0.65rem;letter-spacing:0.12em;text-transform:uppercase;color:var(--teal);margin-bottom:20px">Analyzing your profile</div>', unsafe_allow_html=True)
-    slots = [st.empty() for _ in steps]
-    prog  = st.empty()
 
-    def show_steps(done: int) -> None:
-        for i, (icon, title, sub) in enumerate(steps):
-            if i < done:
-                s = f'<div class="sf-lstep sf-lstep-done"><span class="sf-lstep-icon">✓</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
-            elif i == done:
-                s = f'<div class="sf-lstep sf-lstep-active"><span class="sf-lstep-icon sf-lstep-spin">{icon}</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
-            else:
-                s = f'<div class="sf-lstep sf-lstep-wait"><span class="sf-lstep-icon">○</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
-            slots[i].markdown(s, unsafe_allow_html=True)
-        pct = int(done / len(steps) * 100)
-        prog.markdown(f'<div class="sf-lprog"><div class="sf-lprog-fill" style="width:{pct}%"></div></div>', unsafe_allow_html=True)
+    # Use columns to center the loading box
+    _, center, _ = st.columns([1, 2, 1])
+    with center:
+        st.markdown("""
+        <div style="padding:48px 0 32px;text-align:center">
+          <div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.14em;
+               text-transform:uppercase;color:var(--teal);margin-bottom:6px">⚡ Analyzing your profile</div>
+          <div style="font-size:0.8rem;color:var(--t3);font-family:var(--mono)">Groq LLaMA 3.3 · NetworkX DAG · Semantic matcher</div>
+        </div>""", unsafe_allow_html=True)
 
-    show_steps(0)
-    st.markdown("</div>", unsafe_allow_html=True)  # close loading-wrap
+        slots = [st.empty() for _ in steps]
+        prog  = st.empty()
+
+        def show_steps(done: int) -> None:
+            for i, (icon, title, sub) in enumerate(steps):
+                if i < done:
+                    s = f'<div class="sf-lstep sf-lstep-done"><span class="sf-lstep-icon">✓</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
+                elif i == done:
+                    s = f'<div class="sf-lstep sf-lstep-active"><span class="sf-lstep-icon sf-lstep-spin">{icon}</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
+                else:
+                    s = f'<div class="sf-lstep sf-lstep-wait"><span class="sf-lstep-icon">○</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
+                slots[i].markdown(s, unsafe_allow_html=True)
+            pct = int(done / len(steps) * 100)
+            prog.markdown(
+                f'<div class="sf-lprog" style="margin-top:16px">'
+                f'<div class="sf-lprog-fill" style="width:{pct}%"></div></div>',
+                unsafe_allow_html=True,
+            )
+
+        show_steps(0)
+
     result = run_analysis_with_web(
         resume_text, jd_text,
         resume_image_b64=resume_img,
         location=st.session_state.get("sal_location", "India"),
     )
-    if "error" not in result:
-        show_steps(3); show_steps(4); show_steps(5)
+    with center:
+        if "error" not in result:
+            show_steps(3); show_steps(4); show_steps(5)
 
-    if "error" in result:
-        err = result.get("error", "unknown")
-        if err == "rate_limited":
-            st.error(f"Rate limited — {result.get('message', '')}")
-        elif "analysis_quality_failure" in str(err):
-            st.error("Skill extraction failed. Please try again.")
-        else:
-            st.error(f"Analysis failed: {err}")
-        st.markdown('<div class="sf-ghost">', unsafe_allow_html=True)
-        if st.button("Back", key="retry_btn"):
-            st.session_state["step"] = "input"; st.rerun()
-        st.markdown("</div></div>", unsafe_allow_html=True)
-        return
+        if "error" in result:
+            err = result.get("error", "unknown")
+            st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+            if err == "rate_limited":
+                st.error(f"⏱ Rate limited — {result.get('message', '')}")
+            elif "analysis_quality_failure" in str(err):
+                st.error("Skill extraction failed. Please try again.")
+            else:
+                st.error(f"Analysis failed: {err}")
+            st.markdown('<div class="sf-ghost" style="margin-top:8px">', unsafe_allow_html=True)
+            if st.button("← Back to input", key="retry_btn", use_container_width=True):
+                st.session_state["step"] = "input"; st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+            return
 
     st.session_state["result"] = result
     st.session_state["step"]   = "results"
