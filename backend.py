@@ -51,7 +51,7 @@ def get_ddg_error() -> str:
 def ddg_search(query: str, max_results: int = 5) -> List[dict]:
     global _DDG_ERROR
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results*2, region="wt-wt"))
             blocked = ["zhihu.com", "baidu.com", "weibo.com", "163.com", "csdn.net"]
