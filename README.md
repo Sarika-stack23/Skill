@@ -1,6 +1,6 @@
 # SkillForge ⚡ — AI Adaptive Onboarding Engine
 
-> Intelligent skill-gap analysis and personalised learning pathway generation — powered by Groq LLaMA 3.3-70b, NetworkX DAG, sentence-transformers, and a fully deterministic adaptive algorithm.
+> Intelligent skill-gap analysis and personalized learning pathway generation — powered by Groq LLaMA 3.3, NetworkX DAG, sentence-transformers, and a custom adaptive algorithm.
 
 ## 🚀 Live Demo
 
@@ -8,27 +8,124 @@
 
 No setup needed. Click any demo scenario on the landing page for instant results.
 
-**📹 Demo Video → [Watch on Google Drive](https://drive.google.com/file/d/1dzOV292Z8zhcYhXy_l8U_rs0G9uezaP6/view?usp=sharing)**
+📹 **Video walkthrough → [Watch Demo](https://drive.google.com/file/d/1dzOV292Z8zhcYhXy_l8U_rs0G9uezaP6/view?usp=sharing)**
 
 ---
 
 ## The Problem
 
-Corporate onboarding is broken. Everyone gets the same curriculum regardless of what they already know. Experienced hires waste time on concepts they mastered years ago. Beginners get overwhelmed by advanced modules out of sequence.
+Corporate onboarding is broken. Everyone gets the same 60-hour curriculum regardless of what they already know. Experienced hires waste time on concepts they mastered years ago. Beginners get overwhelmed by advanced modules out of sequence. Nobody wins.
 
 ## The Solution
 
 Upload a **resume PDF** + **job description**. SkillForge:
 
-1. Parses every skill with proficiency score (0–10) and year last used
-2. Applies a **skill decay model** — `prof × max(0.5, 1 − years_unused/5)` — so stale skills don't inflate match scores
-3. Classifies every JD skill as **Known / Partial / Missing** against the candidate profile
-4. Builds a **dependency-aware learning roadmap** using a 47-node NetworkX DAG with topological sort
-5. Detects the **critical path** using node-weighted dynamic programming (required-JD-skill nodes = 10×, prereq-only = 1×)
-6. Auto-injects **LD01/LD02/LD03** leadership modules when a seniority gap is detected
-7. Generates a **2-sentence AI reasoning trace** per module via a dedicated Groq call
-8. Scores **interview readiness** from required skill coverage
-9. Audits the resume for **ATS compliance** and rewrites it without fabricating experience
+1. Validates the uploaded file is genuinely a resume — not a JD, invoice, or report
+2. Extracts every skill with proficiency score (0–10) and year last used
+3. Applies a **skill decay model** — skills unused 2+ years have proficiency reduced
+4. Computes the exact **Known / Partial / Missing** gap against the JD
+5. Generates a **dependency-aware learning roadmap** using a NetworkX DAG with topological sort
+6. Detects the **critical path** using node-weighted dynamic programming
+7. Scores **interview readiness** based on actual required skill coverage
+8. Audits the resume for **ATS compliance** and rewrites it — without fabricating experience
+
+---
+
+## Resume Validation Layer
+
+SkillForge enforces a strict resume-only upload policy to prevent garbage-in garbage-out analysis. Any PDF that is not a genuine resume is blocked before any LLM call is made.
+
+### How it works
+
+```
+Upload PDF
+    │
+    ▼
+[1] PDF-ONLY GATE
+    Streamlit uploader: type=["pdf"]
+    OS file picker physically blocks .docx, .jpg, .png, etc.
+    │
+    ▼
+[2] TEXT EXTRACTION
+    pdfplumber → raw text
+    If text < 30 meaningful words → PyMuPDF rasterise → Vision OCR fallback
+    │
+    ▼
+[3] SIGNAL SCORING  (needs ≥ 3 hits from 35 resume keywords)
+    education, skills, experience, projects, internship, cgpa, gpa,
+    university, linkedin, github, email, phone, python, java, react,
+    developer, engineer, analyst, certification, frameworks, tools …
+    │
+    ▼
+[4] NON-RESUME REJECTION  (any single match = instant block)
+    "job description", "job posting", "we are looking for",
+    "invoice", "purchase order", "terms and conditions",
+    "quarterly report", "bibliography", "chapter ", "abstract",
+    "dear sir", "to whom it may concern", "privacy policy" …
+    │
+    ▼
+[5] LENGTH GUARD
+    < 80 words  → too short to be a resume
+    > 6,000 words → report, thesis, or multi-page document
+    │
+    ▼
+PASS → session state updated, analysis proceeds
+FAIL → inline error shown, session state untouched (prior valid resume preserved)
+```
+
+### Key properties
+
+| Property | Detail |
+|---|---|
+| **Resume signals** | 35+ keywords covering education, skills, experience, tools |
+| **Reject signals** | 20 non-resume document patterns |
+| **Word range** | 80 – 6,000 words |
+| **State corruption on reject** | 0 — a failed upload never overwrites a previously loaded valid resume |
+| **File types accepted** | PDF only |
+| **Error display** | Inline red card with specific reason; no page reload |
+
+### Implementation
+
+```python
+# main.py — _is_resume() function
+RESUME_SIGNALS = [
+    "experience", "education", "skills", "projects", "internship",
+    "b.tech", "bachelor", "master", "cgpa", "gpa", "university",
+    "linkedin", "github", "email", "phone", "developer", "engineer",
+    "python", "java", "javascript", "react", "sql", "aws", "docker",
+    ...  # 35+ signals total
+]
+
+NON_RESUME_SIGNALS = [
+    "job description", "job posting", "we are looking for",
+    "invoice", "purchase order", "terms and conditions",
+    "quarterly report", "bibliography", "chapter ", "abstract",
+    ...  # 20 signals total
+]
+
+def _is_resume(text: str) -> tuple[bool, str]:
+    """Returns (is_resume: bool, reason: str)."""
+    text_lower = text.lower()
+    word_count = len(text.split())
+
+    # Hard reject on non-resume signals
+    for sig in NON_RESUME_SIGNALS:
+        if sig in text_lower:
+            return False, f'This looks like a "{sig.strip()}" document, not a resume.'
+
+    # Require minimum resume keyword density
+    hits = sum(1 for sig in RESUME_SIGNALS if sig in text_lower)
+    if hits < 3:
+        return False, f"Could not confirm this is a resume ({hits}/3 keywords found)."
+
+    # Length bounds
+    if word_count < 80:
+        return False, f"File is too short ({word_count} words) to be a resume."
+    if word_count > 6000:
+        return False, f"File is too long ({word_count} words). Upload just your resume."
+
+    return True, "OK"
+```
 
 ---
 
@@ -45,47 +142,45 @@ Upload a **resume PDF** + **job description**. SkillForge:
 ## Architecture
 
 ```
-Resume (PDF / DOCX / Image) + Job Description
+Resume PDF (validated) + Job Description
+              │
+              ▼
+     ┌──────────────────────┐
+     │  Resume Validation   │  PDF-only gate → signal scoring → length check
+     │  _is_resume()        │  Blocks JDs, invoices, reports, theses
+     └────────┬─────────────┘
               │
               ▼
      ┌─────────────────┐
      │   File Parser   │  pdfplumber · python-docx · base64 image
-     │                 │  scanned-PDF → PyMuPDF rasterise (2× zoom) → Llama 4 Scout vision OCR
+     │                 │  scanned-PDF → PyMuPDF rasterise → vision OCR
      └────────┬────────┘
               │
               ▼
      ┌─────────────────────────────────────┐
-     │   Groq LLM Extraction               │
-     │   LLaMA 3.3-70b-versatile (text)    │
-     │   Llama 4 Scout 17B (vision/images) │
-     │   3-tier fallback + regex scanner   │
+     │   Groq LLM Mega Call                │
+     │   LLaMA 3.3-70b (text)              │
+     │   Llama 4 Scout Vision (images)     │
      └────────┬────────────────────────────┘
               │
               ▼
-     ┌──────────────────────────────────────┐
-     │  Three-Layer Skill Matcher           │
-     │  1. 30+ alias mappings               │
-     │  2. Substring / token overlap        │
-     │  3. Cosine similarity ≥ 0.52         │
-     │     (all-MiniLM-L6-v2 via SBERT)    │
-     │  + 82 compiled regex fallback rules  │
-     │  + Skill Decay Model                 │
-     └────────────┬─────────────────────────┘
+     ┌─────────────────────────┐
+     │  Semantic Skill Matcher  │  sentence-transformers + 60+ regex rules
+     │  + Skill Decay Model     │  max(0.5, 1 - years_since/5)
+     └────────────┬────────────┘
                   │
                   ▼
      ┌──────────────────────────────────────┐
      │      Adaptive Path Generator         │
-     │   NetworkX 47-node DiGraph           │
-     │   topological sort · ancestors()     │
+     │   NetworkX DAG topological sort      │
      │   Node-weighted DP critical path     │
-     │   Seniority gap → LD injection       │
      └──────────────┬───────────────────────┘
                     │
                     ▼
      ┌──────────────────────────────────────┐
-     │   Streamlit UI — 5 tabs              │
-     │   Gap Analysis · Roadmap + ROI       │
-     │   Interview Prep · Research · ATS    │
+     │   Streamlit UI (5 tabs)              │
+     │   Gap · Roadmap · Interview          │
+     │   Research · ATS & Export            │
      └──────────────────────────────────────┘
 ```
 
@@ -106,26 +201,17 @@ The adaptive path generator walks this graph using `nx.ancestors()` to pull all 
 ## Adaptive Algorithm — Logic Detail
 
 ```
-1. Classify all JD skills as Known / Partial / Missing
-   → Apply skill decay: prof × max(0.5, 1 − years_unused/5)
-   → Three-layer matching: alias dict → substring → cosine ≥ 0.52
-
-2. Collect catalog modules for all Missing + Partial gap skills
-
-3. Walk NetworkX ancestors() to pull prerequisite modules
-   → Skip prereq if candidate already has proficiency ≥ 6
-   → MERN Stack → auto-expands to React + JavaScript + REST APIs
-
-4. Build induced subgraph of all needed modules
-   → topological_sort() guarantees foundational-first ordering
-
+1. Collect catalog modules for all Missing + Partial gap skills
+2. Walk NetworkX ancestors() to pull prerequisite modules
+   → Skip if candidate already has proficiency >= 6 for that prereq
+   → MERN Stack → expands to React + JavaScript + REST APIs
+3. Build induced subgraph of all needed modules
+4. topological_sort() → guarantees foundational-first ordering
 5. Node-weighted DP for critical path:
    required_skill_node weight = 10
    prereq_only_node weight    = 1
-
-6. Seniority mismatch → inject LD01 / LD02 / LD03 leadership modules
-
-7. Separate Groq call per module: 2-sentence personalised reasoning trace
+6. Seniority mismatch → inject LD01/LD02/LD03 leadership modules
+7. Separate Groq call for personalized 2-sentence reasoning per module
 ```
 
 ---
@@ -134,20 +220,17 @@ The adaptive path generator walks this graph using `nx.ancestors()` to pull all 
 
 | Layer | Technology |
 |---|---|
-| **UI Framework** | Streamlit ≥ 1.35.0 |
+| **UI Framework** | Streamlit >=1.35.0 |
+| **Input Validation** | `_is_resume()` — 35 resume signals, 20 reject signals, word count guard |
 | **LLM — Text** | Groq API — LLaMA 3.3-70b-versatile |
-| **LLM — Vision** | Groq API — Llama 4 Scout 17B (meta-llama/llama-4-scout-17b-16e-instruct) |
-| **Skill Matching** | sentence-transformers all-MiniLM-L6-v2 · cosine similarity ≥ 0.52 |
-| **Regex Fallback** | 82 compiled patterns — SQL, Docker, K8s, NLP, CI/CD, MERN, vector DBs |
-| **Alias Mapping** | 30+ canonical mappings (JS → JavaScript, MERN → React+JS+REST APIs) |
-| **Dependency Graph** | NetworkX ≥ 3.3 — DiGraph, topological sort, ancestor traversal |
-| **PDF Parsing** | pdfplumber + PyMuPDF (scanned PDF rasterisation at 2× zoom) |
-| **Charts** | Plotly ≥ 5.20 — animated radar, ROI bar, timeline, salary benchmark |
+| **LLM — Vision** | Groq API — Llama 4 Scout 17B |
+| **Skill Matching** | sentence-transformers all-MiniLM-L6-v2 + cosine similarity |
+| **Regex Fallback** | 60+ compiled patterns covering SQL, Docker, K8s, NLP, CI/CD |
+| **Dependency Graph** | networkx — DiGraph, topological sort, ancestor traversal |
+| **PDF Parsing** | pdfplumber + PyMuPDF (scanned PDF rasterisation) |
+| **Charts** | Plotly >=5.20 (animated radar, ROI bar, timeline, salary) |
 | **PDF Export** | reportlab |
-| **Calendar Export** | ICS/iCal — 1 session/day · 7 PM · weekdays only |
-| **Web Search** | ddgs (DuckDuckGo) — live salary, trends, course links |
-| **Concurrency** | ThreadPoolExecutor for parallel web searches |
-| **Caching** | shelve-based hash cache (MD5 keyed by resume + JD) |
+| **Calendar Export** | ICS/iCal — one session/day, 7 PM, weekdays only |
 
 ---
 
@@ -155,25 +238,12 @@ The adaptive path generator walks this graph using `nx.ancestors()` to pull all 
 
 | Resource | Source | Usage |
 |---|---|---|
-| Resume Dataset | [Kaggle — snehaanbhawal](https://www.kaggle.com/datasets/snehaanbhawal/resume-dataset/data) | Resume parsing validation and testing |
-| O\*NET Skills DB | [onetcenter.org](https://www.onetcenter.org/db_releases.html) | Occupational skills taxonomy reference |
-| Job Descriptions | [Kaggle — kshitizregmi](https://www.kaggle.com/datasets/kshitizregmi/jobs-and-job-description) | JD parsing and skill extraction testing |
-| LLaMA 3.3-70b-versatile | Meta via Groq API | Skill extraction, ATS audit, reasoning traces |
-| Llama 4 Scout 17B | Meta via Groq API | Vision OCR — image resumes and scanned PDFs |
-| all-MiniLM-L6-v2 | Hugging Face (SBERT) | Semantic skill matching, cosine similarity |
-
----
-
-## Internal Validation Metrics
-
-| Metric | Value | How it's measured |
-|---|---|---|
-| Hallucinations | 0 | Every recommended module ID is validated against the 47-course catalog before output |
-| Role fit score | Live % | Computed from known/partial/missing skill counts — shown as current → projected in UI |
-| Per-module reasoning | ✓ | Dedicated Groq LLM call per module — 2-sentence trace shown in Roadmap tab |
-| Cosine match threshold | ≥ 0.52 | `sklearn.metrics.pairwise.cosine_similarity` on all-MiniLM-L6-v2 embeddings |
-| Regex fallback rules | 82 | Compiled `re` patterns covering all major tech stacks |
-| Catalog grounding | 100% | `CATALOG_BY_ID` lookup — no free-text course names ever generated |
+| Resume Dataset | [Kaggle — snehaanbhawal](https://www.kaggle.com/datasets/snehaanbhawal/resume-dataset/data) | Resume parsing validation |
+| O*NET Skills DB | [onetcenter.org](https://www.onetcenter.org/db_releases.html) | Skill taxonomy reference |
+| Job Descriptions | [Kaggle — kshitizregmi](https://www.kaggle.com/datasets/kshitizregmi/jobs-and-job-description) | JD parsing testing |
+| LLaMA 3.3-70b | Meta via Groq | Skill extraction, ATS audit, reasoning |
+| Llama 4 Scout 17B | Meta via Groq | Vision OCR — image & scanned PDF |
+| all-MiniLM-L6-v2 | Hugging Face (SBERT) | Semantic skill matching |
 
 ---
 
@@ -181,10 +251,11 @@ The adaptive path generator walks this graph using `nx.ancestors()` to pull all 
 
 ```
 SkillForge/
-├── main.py          ← Streamlit UI — 5 tabs, rendering, session state, resume validation
-├── backend.py       ← Core logic: AI pipeline, DAG, skill matching, charts, web search
-├── dag.png          ← NetworkX DAG visualization (47-course dependency graph)
-├── .env             ← GROQ_API_KEY=gsk_... (never committed)
+├── main.py          <- Streamlit UI — all tabs, rendering, state management
+│                      Includes: _is_resume(), RESUME_SIGNALS, NON_RESUME_SIGNALS
+├── backend.py       <- Core logic: AI pipeline, DAG, analysis, charts
+├── dag.png          <- NetworkX DAG visualization (47-course graph)
+├── .env             <- GROQ_API_KEY=gsk_... (never committed)
 ├── .gitignore
 ├── requirements.txt
 ├── Dockerfile
@@ -200,8 +271,8 @@ SkillForge/
 - Free Groq API key → [console.groq.com](https://console.groq.com)
 
 ```bash
-git clone https://github.com/Sarika-stack23/Skill-Forge.git
-cd Skill-Forge
+git clone https://github.com/Sarika-stack23/Skill.git
+cd Skill
 pip install -r requirements.txt
 echo "GROQ_API_KEY=gsk_your_key_here" > .env
 streamlit run main.py
@@ -235,24 +306,10 @@ numpy>=1.26.0
 ddgs>=9.0.0
 ```
 
-Optional — for scanned PDF vision OCR:
+Optional (for scanned PDF support):
 ```
 PyMuPDF>=1.23.0
 Pillow>=10.0.0
 ```
 
 ---
-
-## UI Output Tabs
-
-| Tab | What it shows |
-|---|---|
-| **Gap Analysis** | Known/Partial/Missing skill cards · animated radar chart · transfer advantages · salary benchmark |
-| **Roadmap** | Dependency-ordered modules · critical path · AI reasoning per module · ROI ranking · timeline |
-| **Interview Prep** | AI questions calibrated to candidate seniority · per-skill readiness · talking points |
-| **Research** | Live salary data · job market insights · skill demand signals · web search · course finder |
-| **ATS & Export** | Resume quality scores · rewrite · PDF / JSON / CSV / ICS calendar download |
-
----
-
-*Built with Groq · NetworkX · Streamlit · sentence-transformers*
