@@ -133,85 +133,116 @@ button, select, input, label,
 
 /* ── TOPBAR ── */
 .sf-top {
-  height:56px; display:flex; align-items:center;
+  height:52px; display:flex; align-items:center;
   justify-content:space-between; padding:0 var(--page-px);
   border-bottom:1px solid var(--border); position:sticky; top:0; z-index:200;
-  background:rgba(11,13,20,0.96); backdrop-filter:blur(20px);
+  background:rgba(11,13,20,0.97); backdrop-filter:blur(24px);
 }
-.sf-logo     { font-size:1.25rem; font-weight:700; color:var(--t1); letter-spacing:-0.03em; }
+.sf-logo     { font-size:1.1rem; font-weight:800; color:var(--t1); letter-spacing:-0.04em; }
 .sf-logo em  { color:var(--teal); font-style:normal; }
-.sf-top-right { display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:0.65rem; color:var(--t3); }
-.sf-chip     { padding:3px 10px; border-radius:4px; border:1px solid var(--border); color:var(--t3); font-size:0.65rem; }
-.sf-chip.on  { border-color:var(--bhi); color:var(--teal); }
+.sf-top-right { display:flex; align-items:center; gap:6px; font-family:var(--mono); font-size:0.6rem; color:var(--t3); }
+.sf-chip     { padding:3px 9px; border-radius:99px; border:1px solid var(--border); color:var(--t3); font-size:0.6rem; font-family:var(--mono); }
+.sf-chip.on  { border-color:rgba(45,212,191,0.3); color:var(--teal); background:rgba(45,212,191,0.05); }
 
-/* ── HERO ── */
-.sf-hero { padding:12px 0 16px; }
+/* ── HERO (redesigned — compact 2-col) ── */
+.sf-hero { padding:28px 0 20px; }
 .sf-eyebrow {
-  font-family:var(--mono); font-size:0.68rem; font-weight:500;
-  letter-spacing:0.12em; text-transform:uppercase; color:var(--teal);
-  display:flex; align-items:center; gap:10px; margin-bottom:12px;
+  font-family:var(--mono); font-size:0.62rem; font-weight:500;
+  letter-spacing:0.14em; text-transform:uppercase; color:var(--teal);
+  display:inline-flex; align-items:center; gap:8px; margin-bottom:14px;
+  background:rgba(45,212,191,0.06); border:1px solid rgba(45,212,191,0.18);
+  border-radius:99px; padding:4px 12px 4px 8px;
 }
-.sf-eyebrow::before { content:''; width:28px; height:1px; background:var(--teal); }
+.sf-eyebrow::before { content:'●'; font-size:0.45rem; color:var(--teal); }
 .sf-h1 {
-  font-size:clamp(2.4rem,5vw,4rem); font-weight:800; color:var(--t1);
-  line-height:1.05; letter-spacing:-0.04em; margin-bottom:16px;
+  font-size:clamp(1.6rem,2.6vw,2.4rem); font-weight:800; color:var(--t1);
+  line-height:1.12; letter-spacing:-0.035em; margin-bottom:12px;
 }
 .sf-h1 span { color:var(--teal); }
-.sf-sub { font-size:1.05rem; color:var(--t2); line-height:1.7; max-width:580px; margin-bottom:24px; }
-.sf-feature-row {
-  display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:4px;
-}
-.sf-feat {
-  display:flex; align-items:flex-start; gap:11px;
-  background:rgba(45,212,191,0.04); border:1px solid rgba(45,212,191,0.12);
-  border-radius:10px; padding:14px 16px; transition:border-color 0.15s, background 0.15s;
-}
-.sf-feat:hover { border-color:rgba(45,212,191,0.28); background:rgba(45,212,191,0.07); }
-.sf-feat-icon  { font-size:1.3rem; margin-top:1px; flex-shrink:0; }
-.sf-feat-title { font-size:0.86rem; font-weight:700; color:var(--t1); margin-bottom:4px; }
-.sf-feat-desc  { font-family:var(--mono); font-size:0.64rem; color:var(--t3); line-height:1.55; }
+.sf-sub { font-size:0.88rem; color:var(--t2); line-height:1.65; max-width:480px; margin-bottom:16px; }
 
-/* ── SAMPLE BUTTONS (hero CTA) ── */
-.sf-sample-hero {
-  display:grid; grid-template-columns:repeat(3,1fr); gap:12px;
-  margin:20px 0 24px;
+/* Feature pills — compact horizontal */
+.sf-feat-pills { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:0; }
+.sf-feat-pill {
+  display:inline-flex; align-items:center; gap:5px;
+  background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);
+  border-radius:99px; padding:4px 11px; font-size:0.72rem;
+  color:var(--t3); font-family:var(--mono); white-space:nowrap;
 }
-.sf-sample-card {
-  background:var(--s2); border:1px solid rgba(45,212,191,0.2);
-  border-radius:10px; padding:16px 20px; cursor:pointer;
-  transition:all 0.15s; text-align:left;
-}
-.sf-sample-card:hover { border-color:var(--teal); background:rgba(45,212,191,0.06); }
-.sf-sample-card-label { font-family:var(--mono); font-size:0.6rem; color:var(--teal); margin-bottom:4px; }
-.sf-sample-card-title { font-size:0.9rem; font-weight:700; color:var(--t1); }
-.sf-sample-card-sub   { font-family:var(--mono); font-size:0.65rem; color:var(--t3); margin-top:4px; }
+.sf-feat-pill b { color:var(--t2); font-weight:500; }
 
+/* Demo CTA panel (right column of hero) */
+.sf-demo-panel {
+  background:var(--s1); border:1px solid var(--border); border-radius:14px;
+  padding:20px; height:100%;
+}
+.sf-demo-hd {
+  font-family:var(--mono); font-size:0.6rem; letter-spacing:0.12em;
+  text-transform:uppercase; color:var(--t3); margin-bottom:12px;
+  display:flex; align-items:center; gap:8px;
+}
+.sf-demo-hd::before { content:''; flex:1; height:1px; background:var(--border); }
+.sf-demo-hd::after  { content:''; flex:1; height:1px; background:var(--border); }
+.sf-demo-card {
+  background:var(--s2); border:1px solid var(--border);
+  border-radius:10px; padding:14px 16px; margin-bottom:8px;
+  cursor:pointer; transition:all 0.15s; display:flex; align-items:center; gap:12px;
+}
+.sf-demo-card:last-child { margin-bottom:0; }
+.sf-demo-card:hover { border-color:rgba(45,212,191,0.35); background:rgba(45,212,191,0.04); }
+.sf-demo-icon { font-size:1.4rem; flex-shrink:0; }
+.sf-demo-body { flex:1; min-width:0; }
+.sf-demo-label { font-family:var(--mono); font-size:0.58rem; color:var(--teal); letter-spacing:0.08em; text-transform:uppercase; margin-bottom:2px; }
+.sf-demo-title { font-size:0.88rem; font-weight:600; color:var(--t1); }
+.sf-demo-sub   { font-family:var(--mono); font-size:0.64rem; color:var(--t3); margin-top:2px; }
+.sf-demo-arr   { color:var(--t4); font-size:1rem; flex-shrink:0; transition:color 0.15s; }
+.sf-demo-card:hover .sf-demo-arr { color:var(--teal); }
+
+/* How-it-works — compact bar */
 .sf-how {
-  display:flex; align-items:center; margin:0 0 12px;
+  display:flex; align-items:stretch; margin:16px 0 12px;
   background:var(--s1); border:1px solid var(--border);
-  border-radius:12px; padding:20px 24px;
+  border-radius:10px; padding:0; overflow:hidden;
 }
-.sf-how-step  { flex:1; text-align:center; }
-.sf-how-num   { font-family:var(--mono); font-size:1.6rem; font-weight:500; color:var(--teal); line-height:1; margin-bottom:6px; }
-.sf-how-title { font-size:0.9rem; font-weight:700; color:var(--t1); margin-bottom:4px; }
-.sf-how-sub   { font-family:var(--mono); font-size:0.65rem; color:var(--t3); line-height:1.5; }
-.sf-how-arrow { font-size:1.2rem; color:var(--teal); opacity:0.4; padding:0 12px; flex-shrink:0; }
+.sf-how-step  { flex:1; text-align:center; padding:14px 16px; position:relative; }
+.sf-how-step:not(:last-child)::after {
+  content:'→'; position:absolute; right:-8px; top:50%; transform:translateY(-50%);
+  color:var(--t4); font-size:0.9rem; z-index:1;
+}
+.sf-how-num   { font-family:var(--mono); font-size:0.62rem; font-weight:600; color:var(--teal); margin-bottom:4px; letter-spacing:0.1em; }
+.sf-how-title { font-size:0.82rem; font-weight:700; color:var(--t1); margin-bottom:2px; }
+.sf-how-sub   { font-family:var(--mono); font-size:0.6rem; color:var(--t3); line-height:1.4; }
+.sf-how-arrow { display:none; }
 
+/* Stats strip — compact */
 .sf-stats-strip {
   display:flex; align-items:center; justify-content:center;
-  margin:0 0 14px; background:rgba(45,212,191,0.04);
-  border:1px solid var(--bhi); border-radius:10px; padding:14px 24px;
+  margin:0 0 14px; background:transparent;
+  border:1px solid var(--border); border-radius:10px; padding:10px 20px;
 }
 .sf-stat   { text-align:center; flex:1; }
-.sf-stat-n { display:block; font-family:var(--mono); font-size:1.8rem; font-weight:500; color:var(--teal); line-height:1; margin-bottom:4px; }
-.sf-stat-l { font-family:var(--mono); font-size:0.62rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--t3); }
-.sf-stat-div { width:1px; height:36px; background:var(--border); margin:0 16px; flex-shrink:0; }
+.sf-stat-n { display:block; font-family:var(--mono); font-size:1.4rem; font-weight:500; color:var(--teal); line-height:1; margin-bottom:2px; }
+.sf-stat-l { font-family:var(--mono); font-size:0.58rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--t4); }
+.sf-stat-div { width:1px; height:28px; background:var(--border); margin:0 12px; flex-shrink:0; }
 
-.sf-panel-hd  { font-size:0.85rem; font-weight:600; color:var(--t1); margin-bottom:14px; display:flex; align-items:center; gap:8px; }
-.sf-panel-icon { font-size:1rem; }
-.sf-ready-badge { font-family:var(--mono); font-size:0.6rem; padding:2px 8px; border-radius:3px; background:rgba(45,212,191,0.1); color:var(--teal); border:1px solid var(--bhi); margin-left:auto; }
-.sf-wc { font-family:var(--mono); font-size:0.65rem; color:var(--t3); margin-top:8px; }
+.sf-panel-hd  { font-size:0.82rem; font-weight:700; color:var(--t1); margin-bottom:12px; display:flex; align-items:center; gap:7px; letter-spacing:-0.01em; }
+.sf-panel-icon { font-size:0.9rem; }
+.sf-ready-badge { font-family:var(--mono); font-size:0.58rem; padding:2px 8px; border-radius:99px; background:rgba(45,212,191,0.1); color:var(--teal); border:1px solid var(--bhi); margin-left:auto; }
+.sf-wc { font-family:var(--mono); font-size:0.62rem; color:var(--t3); margin-top:6px; }
 .sf-sample-lbl { font-family:var(--mono); font-size:0.65rem; color:var(--t3); }
+/* Upload card wrapper */
+.sf-upload-card {
+  background:var(--s1); border:1px solid var(--border); border-radius:12px;
+  padding:18px 20px; transition:border-color 0.15s;
+}
+.sf-upload-card:focus-within { border-color:rgba(45,212,191,0.3); }
+/* Bottom action bar */
+.sf-action-bar {
+  display:flex; align-items:center; gap:12px; margin-top:12px;
+  padding:12px 16px; background:var(--s1); border:1px solid var(--border);
+  border-radius:10px;
+}
+.sf-action-bar-label { font-family:var(--mono); font-size:0.68rem; color:var(--t3); flex:1; }
 
 /* ── UPLOAD ── */
 [data-testid="stFileUploadDropzone"] {
@@ -581,47 +612,60 @@ def render_topbar(is_image_resume: bool = False) -> None:
     )
     st.markdown(f"""
     <div class="sf-top">
-      <div class="sf-logo">Skill<em>Forge</em></div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <div class="sf-logo">Skill<em>Forge</em></div>
+        <span style="font-family:var(--mono);font-size:0.58rem;color:var(--t4);padding:2px 7px;background:var(--s2);border:1px solid var(--border);border-radius:3px">v14</span>
+      </div>
       <div class="sf-top-right">
-        <span class="sf-chip on">⚡ Groq-powered</span>
+        <span class="sf-chip on">⚡ Groq LLaMA 3.3</span>
         {vision_chip}
+        <span class="sf-chip" style="color:var(--t4)">NetworkX DAG</span>
       </div>
     </div>""", unsafe_allow_html=True)
 
 # =============================================================================
-#  INPUT PAGE — sample buttons as hero CTA
+#  INPUT PAGE — clean professional redesign
 # =============================================================================
 def render_input() -> None:
-    st.markdown('<div class="sf-page" style="padding:20px 40px 80px">', unsafe_allow_html=True)
+    st.markdown('<div class="sf-page" style="padding:0 40px 60px">', unsafe_allow_html=True)
 
-    st.markdown("""
-    <div class="sf-hero">
-      <div class="sf-eyebrow">ARTPARK CodeForge · AI Adaptive Onboarding Engine</div>
-      <div class="sf-h1">Skip what you know.<br><span>Learn what you need.</span></div>
-      <div class="sf-sub">Upload your resume and target job description. SkillForge maps your exact skill gap and generates a dependency-ordered, personalized learning roadmap — powered by Groq LLaMA&nbsp;3.3.</div>
-      <div class="sf-feature-row">
-        <div class="sf-feat"><span class="sf-feat-icon">🧠</span><div><div class="sf-feat-title">Skill Decay Model</div><div class="sf-feat-desc">Proficiency auto-adjusts for skills unused 2+ years</div></div></div>
-        <div class="sf-feat"><span class="sf-feat-icon">🗺</span><div><div class="sf-feat-title">NetworkX DAG</div><div class="sf-feat-desc">Topological sort ensures foundational-first ordering</div></div></div>
-        <div class="sf-feat"><span class="sf-feat-icon">🎯</span><div><div class="sf-feat-title">Zero Hallucinations</div><div class="sf-feat-desc">All recs strictly from the 47-course catalog</div></div></div>
-        <div class="sf-feat"><span class="sf-feat-icon">⚡</span><div><div class="sf-feat-title">Critical Path DP</div><div class="sf-feat-desc">Node-weighted algo surfaces highest-ROI modules</div></div></div>
-      </div>
-    </div>""", unsafe_allow_html=True)
+    # ── HERO: 2-column layout ──
+    hero_l, hero_r = st.columns([11, 9], gap="large")
 
-    # ── SAMPLE BUTTONS as primary CTA ──
-    st.markdown("""
-    <div style="margin:4px 0 8px">
-      <div style="font-family:var(--mono);font-size:0.65rem;color:var(--t3);margin-bottom:10px">⚡ Try a demo — instant results, no upload needed</div>
-    </div>""", unsafe_allow_html=True)
+    with hero_l:
+        st.markdown("""
+        <div class="sf-hero">
+          <div class="sf-eyebrow">ARTPARK CodeForge · AI Adaptive Onboarding</div>
+          <div class="sf-h1">Skip what you know.<br><span>Learn what you need.</span></div>
+          <div class="sf-sub">Upload resume + JD — SkillForge maps your exact skill gap and generates a dependency-ordered roadmap powered by Groq LLaMA&nbsp;3.3 and NetworkX DAG.</div>
+          <div class="sf-feat-pills">
+            <span class="sf-feat-pill">🧠 <b>Skill Decay Model</b></span>
+            <span class="sf-feat-pill">🗺 <b>NetworkX DAG</b></span>
+            <span class="sf-feat-pill">🎯 <b>Zero Hallucinations</b></span>
+            <span class="sf-feat-pill">⚡ <b>Critical Path DP</b></span>
+            <span class="sf-feat-pill">🖼 <b>Vision OCR</b></span>
+          </div>
+        </div>""", unsafe_allow_html=True)
 
-    pc1, pc2, pc3 = st.columns(3)
-    sample_meta = {
-        "junior_swe": ("💻", "Tech Role", "Junior SWE → Mid Full Stack"),
-        "senior_ds":  ("🧠", "Data / AI Role", "Senior DS → Lead AI"),
-        "hr_manager": ("👔", "Non-Tech Role", "HR Coordinator → Manager"),
-    }
-    for col, (key, (icon, label, sub)) in zip([pc1, pc2, pc3], sample_meta.items()):
-        with col:
-            if st.button(f"{icon}  {label}", key=f"pre_{key}", use_container_width=True, type="secondary"):
+    with hero_r:
+        # Demo cards panel
+        st.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
+        st.markdown("""
+        <div class="sf-demo-panel">
+          <div class="sf-demo-hd">Try a demo — instant results</div>
+        </div>""", unsafe_allow_html=True)
+
+        sample_meta = {
+            "junior_swe": ("💻", "TECH", "Junior SWE → Mid Full Stack", "Python · React · Docker · AWS"),
+            "senior_ds":  ("🧠", "DATA / AI", "Senior DS → Lead AI", "ML · NLP · MLOps · Leadership"),
+            "hr_manager": ("👔", "NON-TECH", "HR Coordinator → Manager", "HR · L&D · Employee Relations"),
+        }
+        for key, (icon, label, title, tags) in sample_meta.items():
+            clicked = st.button(
+                f"{icon}  {title}",
+                key=f"pre_{key}", use_container_width=True, type="secondary",
+            )
+            if clicked:
                 for wk in _RESET_KEYS:
                     st.session_state.pop(wk, None)
                 st.session_state["resume_text"]    = SAMPLES[key]["resume"]
@@ -629,38 +673,57 @@ def render_input() -> None:
                 st.session_state["_resume_source"] = "paste"
                 st.session_state["step"]           = "analyzing"
                 st.rerun()
+            st.markdown(
+                f'<div style="font-family:var(--mono);font-size:0.6rem;color:var(--t4);'
+                f'margin:-6px 0 8px 4px">{label} · {tags}</div>',
+                unsafe_allow_html=True,
+            )
 
-    st.markdown('<div style="height:20px"></div>', unsafe_allow_html=True)
+    # ── HOW IT WORKS ── compact bar
     st.markdown("""
     <div class="sf-how">
-      <div class="sf-how-step"><div class="sf-how-num">01</div><div class="sf-how-title">Upload Resume + JD</div><div class="sf-how-sub">PDF, DOCX, or image — Vision AI reads it all</div></div>
-      <div class="sf-how-arrow">→</div>
-      <div class="sf-how-step"><div class="sf-how-num">02</div><div class="sf-how-title">AI Maps Your Gap</div><div class="sf-how-sub">Groq LLaMA extracts skills · detects decay · scores proficiency</div></div>
-      <div class="sf-how-arrow">→</div>
-      <div class="sf-how-step"><div class="sf-how-num">03</div><div class="sf-how-title">Get Your Roadmap</div><div class="sf-how-sub">NetworkX DAG orders modules by dependency — zero redundancy</div></div>
+      <div class="sf-how-step">
+        <div class="sf-how-num">01 · UPLOAD</div>
+        <div class="sf-how-title">Resume + JD</div>
+        <div class="sf-how-sub">PDF, DOCX, or image — Vision AI reads it all</div>
+      </div>
+      <div class="sf-how-step">
+        <div class="sf-how-num">02 · ANALYZE</div>
+        <div class="sf-how-title">AI Maps Your Gap</div>
+        <div class="sf-how-sub">Skills scored 0–10 · decay model · semantic match</div>
+      </div>
+      <div class="sf-how-step">
+        <div class="sf-how-num">03 · LEARN</div>
+        <div class="sf-how-title">Get Your Roadmap</div>
+        <div class="sf-how-sub">DAG-ordered · critical path · AI reasoning per module</div>
+      </div>
     </div>""", unsafe_allow_html=True)
 
+    # ── STATS strip ──
     st.markdown("""
     <div class="sf-stats-strip">
-      <div class="sf-stat"><span class="sf-stat-n">47</span><span class="sf-stat-l">Courses in catalog</span></div>
+      <div class="sf-stat"><span class="sf-stat-n">47</span><span class="sf-stat-l">Courses</span></div>
       <div class="sf-stat-div"></div>
-      <div class="sf-stat"><span class="sf-stat-n">6</span><span class="sf-stat-l">Skill domains</span></div>
+      <div class="sf-stat"><span class="sf-stat-n">6</span><span class="sf-stat-l">Domains</span></div>
       <div class="sf-stat-div"></div>
-      <div class="sf-stat"><span class="sf-stat-n">3</span><span class="sf-stat-l">Demo scenarios</span></div>
+      <div class="sf-stat"><span class="sf-stat-n">3</span><span class="sf-stat-l">Demo Scenarios</span></div>
       <div class="sf-stat-div"></div>
       <div class="sf-stat"><span class="sf-stat-n">0</span><span class="sf-stat-l">Hallucinations</span></div>
+      <div class="sf-stat-div"></div>
+      <div class="sf-stat"><span class="sf-stat-n">LLaMA 3.3</span><span class="sf-stat-l">LLM Engine</span></div>
     </div>""", unsafe_allow_html=True)
 
+    # ── UPLOAD PANELS ──
     left, right = st.columns(2, gap="large")
 
     with left:
         src_flag   = st.session_state.get("_resume_source", "")
         has_resume = bool(st.session_state.get("resume_text", "").strip() or st.session_state.get("resume_image"))
         badge      = '<span class="sf-ready-badge">✓ Ready</span>' if has_resume else ''
-        st.markdown('<div style="background:var(--s1);border:1px solid var(--border);border-radius:12px;padding:20px 22px">', unsafe_allow_html=True)
-        st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">📄</span> Your resume {badge}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sf-upload-card">', unsafe_allow_html=True)
+        st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">📄</span> Resume {badge}</div>', unsafe_allow_html=True)
 
-        up_tab, paste_tab = st.tabs(["Upload Resume", "Paste Resume"])
+        up_tab, paste_tab = st.tabs(["Upload file", "Paste text"])
         with up_tab:
             rf = st.file_uploader("Resume", type=["pdf","docx","jpg","jpeg","png","webp"],
                                    key="res_file", label_visibility="collapsed")
@@ -687,24 +750,24 @@ def render_input() -> None:
                     ss_txt = st.session_state.get("resume_text", "")
                     ss_img = st.session_state.get("resume_image")
                     if ss_img:
-                        st.success(f"✓ {rf.name} — image loaded (Vision AI will analyze)")
+                        st.success(f"✓ {rf.name} — image loaded (Vision AI)")
                     elif ss_txt and not ss_txt.startswith("["):
-                        st.success(f"✓ {rf.name} — {len(ss_txt.split())} words extracted")
-                        st.caption(f"Preview: {ss_txt[:200]}…")
+                        st.success(f"✓ {rf.name} — {len(ss_txt.split())} words")
+                        st.caption(f"{ss_txt[:160]}…")
                     else:
                         st.error(f"Could not read {rf.name}. Try paste or JPG/PNG.")
 
         with paste_tab:
             if st.session_state.get("_resume_source") == "file":
-                st.info("File loaded. Type here to switch to pasted text.")
-                if st.button("Switch to paste mode", key="sw_paste"):
+                st.info("File loaded. Type below to switch to paste mode.")
+                if st.button("Switch to paste", key="sw_paste"):
                     for k in ["_resume_source","_resume_hash","_resume_fname",
                                "resume_text","resume_image","result","rw_result"]:
                         st.session_state.pop(k, None)
                     st.rerun()
             else:
-                rp = st.text_area("Resume text", height=220,
-                                   placeholder="Paste your resume here...",
+                rp = st.text_area("Resume text", height=180,
+                                   placeholder="Paste your resume here…",
                                    key="res_paste", label_visibility="collapsed")
                 if rp and rp.strip():
                     st.session_state["resume_text"]    = rp.strip()
@@ -714,7 +777,7 @@ def render_input() -> None:
                         st.markdown(f'<div class="sf-wc">{len(rp.split())} words</div>', unsafe_allow_html=True)
 
         if has_resume and src_flag == "file":
-            st.markdown('<div class="sf-ghost" style="margin-top:8px">', unsafe_allow_html=True)
+            st.markdown('<div class="sf-ghost" style="margin-top:6px">', unsafe_allow_html=True)
             if st.button("Clear resume", key="clr_res"):
                 for k in ["resume_text","resume_image","res_paste","_resume_source",
                            "_resume_fname","_resume_hash","result","rw_result"]:
@@ -722,15 +785,15 @@ def render_input() -> None:
                 _init_state()
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)  # close upload card
+        st.markdown("</div>", unsafe_allow_html=True)
 
     with right:
         has_jd   = bool(st.session_state.get("jd_text", "").strip())
         badge_jd = '<span class="sf-ready-badge">✓ Ready</span>' if has_jd else ''
-        st.markdown('<div style="background:var(--s1);border:1px solid var(--border);border-radius:12px;padding:20px 22px">', unsafe_allow_html=True)
-        st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">💼</span> Job description {badge_jd}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sf-upload-card">', unsafe_allow_html=True)
+        st.markdown(f'<div class="sf-panel-hd"><span class="sf-panel-icon">💼</span> Job Description {badge_jd}</div>', unsafe_allow_html=True)
 
-        jup_tab, jpaste_tab = st.tabs(["Upload JD", "Paste JD"])
+        jup_tab, jpaste_tab = st.tabs(["Upload file", "Paste text"])
         with jup_tab:
             jf = st.file_uploader("JD", type=["pdf","docx"], key="jd_file", label_visibility="collapsed")
             if jf is not None:
@@ -750,8 +813,8 @@ def render_input() -> None:
                         st.error(f"Could not read {jf.name}")
 
         with jpaste_tab:
-            jp = st.text_area("Job description", height=220,
-                               placeholder="Paste the job description here...",
+            jp = st.text_area("Job description", height=180,
+                               placeholder="Paste the job description here…",
                                key="jd_paste", label_visibility="collapsed")
             if jp and jp.strip():
                 st.session_state["jd_text"]    = jp.strip()
@@ -759,32 +822,35 @@ def render_input() -> None:
                 if len(jp.split()) > 5:
                     st.markdown(f'<div class="sf-wc">{len(jp.split())} words</div>', unsafe_allow_html=True)
 
-        st.markdown("</div>", unsafe_allow_html=True)  # close right upload card
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-    opt1, opt2_col, _, btn_col = st.columns([1, 1.2, 0.6, 1.6])
+    # ── BOTTOM ACTION BAR ──
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+    opt1, opt2_col, btn_col = st.columns([1.2, 1.2, 2.4])
     with opt1:
         cur_loc = st.session_state.get("sal_location", "India")
         idx_loc = _LOC_OPTS.index(cur_loc) if cur_loc in _LOC_OPTS else 0
-        st.selectbox("Salary location", _LOC_OPTS, index=idx_loc, key="sal_location")
+        st.selectbox("Salary location", _LOC_OPTS, index=idx_loc, key="sal_location", label_visibility="visible")
     with opt2_col:
-        with st.expander("Advanced"):
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        with st.expander("⚙ Advanced"):
             st.checkbox("Force fresh (skip cache)", key="force_fresh")
     with btn_col:
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
         resume_ready = bool(st.session_state.get("resume_text","").strip() or st.session_state.get("resume_image"))
         jd_ready     = bool(st.session_state.get("jd_text","").strip())
         if resume_ready and jd_ready:
             is_img = bool(st.session_state.get("resume_image"))
-            lbl    = "Analyze image resume ⚡" if is_img else "Analyze skill gap ⚡"
+            lbl    = "⚡ Analyze image resume" if is_img else "⚡ Analyze skill gap"
             if st.button(lbl, key="go_btn", use_container_width=True):
                 st.session_state["step"] = "analyzing"
                 st.rerun()
         else:
             missing = (["resume"] if not resume_ready else []) + (["job description"] if not jd_ready else [])
             st.markdown(
-                f'<p style="font-family:var(--mono);font-size:0.75rem;color:var(--t3);text-align:center;padding:12px 0">'
-                f'Add {" and ".join(missing)} to continue</p>',
+                f'<div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;'
+                f'padding:10px 16px;font-family:var(--mono);font-size:0.72rem;color:var(--t3);text-align:center">'
+                f'Add {" + ".join(missing)} to continue →</div>',
                 unsafe_allow_html=True,
             )
     st.markdown("</div>", unsafe_allow_html=True)
