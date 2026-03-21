@@ -1,10 +1,5 @@
 # =============================================================================
-#  main.py — SkillForge v14  |  Hackathon Edition
-#  FIXES:
-#  - Added Course Dependency Graph at bottom of Roadmap tab
-#  - Fixed duplicate "Rate limited" text in loading error state
-#  - Improved loading screen error styling
-#  - CSS polish: tighter gap on demo buttons, better error card
+#  main.py — SkillForge v14  |  PDF-only resume + resume validation
 # =============================================================================
 
 import os, json, urllib.parse, threading, hashlib
@@ -55,6 +50,63 @@ def _safe_float(v, default=0.0):
 if not _bk.GROQ_CLIENT:
     st.error("**GROQ_API_KEY missing** — add it to `.env` → [console.groq.com](https://console.groq.com)")
     st.stop()
+
+# =============================================================================
+#  RESUME VALIDATION
+# =============================================================================
+RESUME_SIGNALS = [
+    "experience", "education", "skills", "projects", "internship",
+    "work history", "employment", "objective", "summary", "b.tech",
+    "bachelor", "master", "cgpa", "gpa", "university", "college",
+    "certification", "achievements", "profile", "linkedin", "github",
+    "email", "phone", "responsibilities", "technologies",
+    "languages", "frameworks", "tools", "awarded", "graduated",
+    "developer", "engineer", "analyst", "intern", "python", "java",
+    "javascript", "react", "sql", "aws", "docker", "machine learning",
+]
+
+NON_RESUME_SIGNALS = [
+    "job description", "job posting", "we are looking for", "requirements:",
+    "about the company", "we offer", "apply now",
+    "equal opportunity employer", "invoice", "purchase order", "receipt",
+    "balance sheet", "profit and loss", "quarterly report", "press release",
+    "dear sir", "to whom it may concern", "hereby certify", "agreement between",
+    "terms and conditions", "privacy policy", "agenda", "minutes of meeting",
+    "chapter ", "abstract", "bibliography", "references\n", "table of contents",
+]
+
+def _is_resume(text: str):
+    """Returns (is_resume: bool, reason: str)."""
+    if not text or len(text.strip()) < 50:
+        return False, "File appears to be empty or unreadable. Try a text-based PDF."
+
+    text_lower = text.lower()
+    word_count = len(text.split())
+
+    for sig in NON_RESUME_SIGNALS:
+        if sig in text_lower:
+            return False, (
+                f'This looks like a "{sig.strip()}" document, not a resume. '
+                f'Please upload your personal resume PDF.'
+            )
+
+    hits = sum(1 for sig in RESUME_SIGNALS if sig in text_lower)
+    if hits < 3:
+        return False, (
+            f"Could not confirm this is a resume ({hits}/3 resume keywords found). "
+            f"Please upload your resume PDF."
+        )
+
+    if word_count < 80:
+        return False, f"File is too short ({word_count} words) to be a resume."
+
+    if word_count > 6000:
+        return False, (
+            f"File is very long ({word_count} words). "
+            f"Please upload just your resume, not a multi-page report or thesis."
+        )
+
+    return True, "OK"
 
 # =============================================================================
 #  CSS
@@ -504,7 +556,7 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-lprog      { height:3px; background:rgba(255,255,255,0.05); border-radius:99px; overflow:hidden; margin:20px 0 0; }
 .sf-lprog-fill { height:100%; border-radius:99px; background:linear-gradient(90deg,var(--teal),var(--green)); transition:width 0.6s ease; }
 
-/* ── LOADING ERROR CARD — clean, not jarring ── */
+/* ── ERROR CARD ── */
 .sf-error-card {
   margin-top:16px; padding:16px 20px;
   background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.25);
@@ -515,6 +567,14 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-error-body  { font-family:var(--mono); font-size:0.72rem; color:var(--t3); line-height:1.6; }
 .sf-error-hint  { font-family:var(--mono); font-size:0.68rem; color:var(--t4); margin-top:8px; padding-top:8px; border-top:1px solid rgba(239,68,68,0.15); }
 
+/* ── VALIDATION WARNING ── */
+.sf-validation-warn {
+  background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.25);
+  border-radius:8px; padding:12px 16px; margin-top:8px;
+  font-family:var(--mono); font-size:0.72rem; color:#fca5a5; line-height:1.6;
+}
+.sf-validation-warn strong { color:var(--red); }
+
 /* ── MISC ── */
 .sf-sh      { font-size:1.15rem; font-weight:700; color:var(--t1); letter-spacing:-0.02em; margin-bottom:4px; }
 .sf-ss      { font-family:var(--mono); font-size:0.68rem; color:var(--t3); margin-bottom:18px; }
@@ -524,7 +584,7 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-impact-box   { background:var(--s1); border:1px solid var(--border); border-radius:10px; padding:22px 28px; margin:24px 0; }
 .sf-page { max-width:1400px; margin:0 auto; }
 
-/* ── UPLOAD PANEL COLUMNS — card styling via :has() ── */
+/* ── UPLOAD PANEL COLUMNS ── */
 [data-testid="stHorizontalBlock"]:has([data-testid="stFileUploadDropzone"]) [data-testid="column"] {
   background:var(--s1)!important;
   border:1px solid var(--border)!important;
@@ -538,7 +598,7 @@ textarea::placeholder { color:var(--t4)!important; }
   margin-bottom:10px; display:flex; align-items:center; gap:8px;
 }
 
-/* ── DEMO CARD LINKS (pure HTML, not Streamlit buttons) ── */
+/* ── DEMO CARD LINKS ── */
 .sf-demo-card-link {
   display:flex; align-items:center; gap:12px;
   background:var(--s2); border:1px solid var(--border);
@@ -629,10 +689,10 @@ def render_topbar(is_image_resume: bool = False) -> None:
     </div>""", unsafe_allow_html=True)
 
 # =============================================================================
-#  INPUT PAGE  — fixed: no fake wrapper divs, demo panel as pure HTML
+#  INPUT PAGE
 # =============================================================================
 def render_input() -> None:
-    # ── Handle demo selection via query params (pure-HTML demo cards use ?demo=KEY) ──
+    # ── Handle demo selection via query params ──
     demo_choice = st.query_params.get("demo", "")
     if demo_choice and demo_choice in SAMPLES:
         for wk in _RESET_KEYS:
@@ -653,20 +713,18 @@ def render_input() -> None:
         <div class="sf-hero">
           <div class="sf-eyebrow">ARTPARK CodeForge · AI Adaptive Onboarding</div>
           <div class="sf-h1">Skip what you know.<br><span>Learn what you need.</span></div>
-          <div class="sf-sub">Upload resume + JD — SkillForge maps your exact skill gap and generates a
+          <div class="sf-sub">Upload your resume PDF + JD — SkillForge maps your exact skill gap and generates a
           dependency-ordered roadmap powered by Groq LLaMA&nbsp;3.3 and NetworkX DAG.</div>
           <div class="sf-feat-pills">
             <span class="sf-feat-pill">🧠 <b>Skill Decay Model</b></span>
             <span class="sf-feat-pill">🗺 <b>NetworkX DAG</b></span>
             <span class="sf-feat-pill">🎯 <b>Zero Hallucinations</b></span>
             <span class="sf-feat-pill">⚡ <b>Critical Path DP</b></span>
-            <span class="sf-feat-pill">🖼 <b>Vision OCR</b></span>
+            <span class="sf-feat-pill">📄 <b>Resume PDF Only</b></span>
           </div>
         </div>""", unsafe_allow_html=True)
 
     with hero_r:
-        # ── DEMO PANEL — entirely pure HTML so the card wrapper actually works ──
-        # Uses ?demo=KEY query param; Python detects it at top of this function
         st.markdown('<div style="height:20px"></div>', unsafe_allow_html=True)
         st.markdown("""
         <div style="background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:20px">
@@ -711,8 +769,8 @@ def render_input() -> None:
     <div class="sf-how">
       <div class="sf-how-step">
         <div class="sf-how-num">01 · UPLOAD</div>
-        <div class="sf-how-title">Resume + JD</div>
-        <div class="sf-how-sub">PDF, DOCX, or image — Vision AI reads it all</div>
+        <div class="sf-how-title">Resume PDF + JD</div>
+        <div class="sf-how-sub">Resume PDF only · JD as PDF or paste</div>
       </div>
       <div class="sf-how-step">
         <div class="sf-how-num">02 · ANALYZE</div>
@@ -742,7 +800,6 @@ def render_input() -> None:
     </div>""", unsafe_allow_html=True)
 
     # ── UPLOAD PANELS ──
-    # Note: card background applied via CSS :has([data-testid="stFileUploadDropzone"])
     left, right = st.columns(2, gap="large")
 
     with left:
@@ -751,48 +808,81 @@ def render_input() -> None:
         badge      = '&nbsp;<span class="sf-ready-badge">✓ Ready</span>' if has_resume else ''
         border_col = "rgba(45,212,191,0.35)" if has_resume else "transparent"
 
-        # Header rendered as standalone markdown — NO fake card wrapper
         st.markdown(
             f'<div class="sf-upload-hd" style="border-bottom:1px solid var(--border);'
             f'padding-bottom:10px;margin-bottom:4px;border-top:3px solid {border_col};'
             f'padding-top:10px;border-radius:3px 3px 0 0;">'
-            f'<span style="font-size:0.9rem">📄</span> Resume{badge}</div>',
+            f'<span style="font-size:0.9rem">📄</span> Resume (PDF only){badge}</div>',
             unsafe_allow_html=True,
         )
 
-        up_tab, paste_tab = st.tabs(["Upload file", "Paste text"])
+        up_tab, paste_tab = st.tabs(["Upload PDF", "Paste text"])
+
         with up_tab:
-            rf = st.file_uploader("Resume", type=["pdf","docx","jpg","jpeg","png","webp"],
-                                   key="res_file", label_visibility="collapsed")
+            # ── PDF-ONLY uploader ──────────────────────────────────────────
+            rf = st.file_uploader(
+                "Resume PDF",
+                type=["pdf"],
+                key="res_file",
+                label_visibility="collapsed",
+                help="Upload your resume as a PDF file. Other formats are not accepted.",
+            )
+            st.markdown(
+                '<div style="font-family:var(--mono);font-size:0.6rem;color:var(--t3);margin-top:4px">'
+                '📎 PDF files only · Your resume only · Not a JD or report</div>',
+                unsafe_allow_html=True,
+            )
+
             if rf is not None:
                 try:
                     rf.seek(0)
                     raw_bytes = rf.read()
                 except Exception:
                     raw_bytes = b""
+
                 if raw_bytes:
                     new_hash = hashlib.md5(raw_bytes).hexdigest()
                     if new_hash != st.session_state.get("_resume_hash", ""):
+                        # Extract text
                         txt, img = _parse_bytes(raw_bytes, rf.name)
-                        cache_bust(txt, img, st.session_state.get("jd_text", ""))
-                        for k in list(st.session_state.keys()):
-                            if k not in ("sal_location", "force_fresh", "hpd"):
-                                st.session_state.pop(k, None)
-                        _init_state()
-                        st.session_state.update({
-                            "resume_text": txt, "resume_image": img,
-                            "_resume_source": "file", "_resume_fname": rf.name,
-                            "_resume_hash": new_hash, "step": "input",
-                        })
+
+                        # ── RESUME VALIDATION ──────────────────────────────
+                        valid, reason = _is_resume(txt)
+                        if not valid:
+                            st.markdown(
+                                f'<div class="sf-validation-warn">'
+                                f'<strong>❌ Not a resume:</strong> {reason}'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                            st.caption("Upload your own resume PDF — not a job description, report, or other document.")
+                            # Do NOT update session state
+                        else:
+                            # ✓ Valid resume — update state
+                            cache_bust(txt, img, st.session_state.get("jd_text", ""))
+                            for k in list(st.session_state.keys()):
+                                if k not in ("sal_location", "force_fresh", "hpd"):
+                                    st.session_state.pop(k, None)
+                            _init_state()
+                            st.session_state.update({
+                                "resume_text":     txt,
+                                "resume_image":    img,
+                                "_resume_source":  "file",
+                                "_resume_fname":   rf.name,
+                                "_resume_hash":    new_hash,
+                                "step":            "input",
+                            })
+
+                    # Show status for currently loaded file
                     ss_txt = st.session_state.get("resume_text", "")
                     ss_img = st.session_state.get("resume_image")
-                    if ss_img:
-                        st.success(f"✓ {rf.name} — image loaded (Vision AI)")
-                    elif ss_txt and not ss_txt.startswith("["):
-                        st.success(f"✓ {rf.name} — {len(ss_txt.split())} words")
+                    if ss_txt and not ss_txt.startswith("[") and not ss_img:
+                        st.success(f"✓ {rf.name} — {len(ss_txt.split())} words · Resume confirmed")
                         st.caption(f"{ss_txt[:160]}…")
-                    else:
-                        st.error(f"Could not read {rf.name}. Try paste or JPG/PNG.")
+                    elif ss_img:
+                        st.success(f"✓ {rf.name} — scanned PDF (Vision AI)")
+                    elif ss_txt and ss_txt.startswith("["):
+                        st.error(f"Could not read {rf.name}. Try a text-based PDF.")
 
         with paste_tab:
             if st.session_state.get("_resume_source") == "file":
@@ -803,9 +893,13 @@ def render_input() -> None:
                         st.session_state.pop(k, None)
                     st.rerun()
             else:
-                rp = st.text_area("Resume text", height=180,
-                                   placeholder="Paste your resume here…",
-                                   key="res_paste", label_visibility="collapsed")
+                rp = st.text_area(
+                    "Resume text",
+                    height=180,
+                    placeholder="Paste your resume text here…",
+                    key="res_paste",
+                    label_visibility="collapsed",
+                )
                 if rp and rp.strip():
                     st.session_state["resume_text"]    = rp.strip()
                     st.session_state["_resume_source"] = "paste"
@@ -822,8 +916,8 @@ def render_input() -> None:
                 st.rerun()
 
     with right:
-        has_jd   = bool(st.session_state.get("jd_text", "").strip())
-        badge_jd = '&nbsp;<span class="sf-ready-badge">✓ Ready</span>' if has_jd else ''
+        has_jd    = bool(st.session_state.get("jd_text", "").strip())
+        badge_jd  = '&nbsp;<span class="sf-ready-badge">✓ Ready</span>' if has_jd else ''
         border_jd = "rgba(45,212,191,0.35)" if has_jd else "transparent"
 
         st.markdown(
@@ -854,9 +948,13 @@ def render_input() -> None:
                         st.error(f"Could not read {jf.name}")
 
         with jpaste_tab:
-            jp = st.text_area("Job description", height=180,
-                               placeholder="Paste the job description here…",
-                               key="jd_paste", label_visibility="collapsed")
+            jp = st.text_area(
+                "Job description",
+                height=180,
+                placeholder="Paste the job description here…",
+                key="jd_paste",
+                label_visibility="collapsed",
+            )
             if jp and jp.strip():
                 st.session_state["jd_text"]    = jp.strip()
                 st.session_state["_jd_source"] = "paste"
@@ -879,13 +977,11 @@ def render_input() -> None:
         resume_ready = bool(st.session_state.get("resume_text","").strip() or st.session_state.get("resume_image"))
         jd_ready     = bool(st.session_state.get("jd_text","").strip())
         if resume_ready and jd_ready:
-            is_img = bool(st.session_state.get("resume_image"))
-            lbl    = "⚡  Analyze image resume" if is_img else "⚡  Analyze skill gap →"
-            if st.button(lbl, key="go_btn", use_container_width=True):
+            if st.button("⚡  Analyze skill gap →", key="go_btn", use_container_width=True):
                 st.session_state["step"] = "analyzing"
                 st.rerun()
         else:
-            missing = (["resume"] if not resume_ready else []) + (["job description"] if not jd_ready else [])
+            missing = (["resume PDF"] if not resume_ready else []) + (["job description"] if not jd_ready else [])
             st.markdown(
                 f'<div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;'
                 f'padding:11px 16px;font-family:var(--mono);font-size:0.72rem;color:var(--t3);'
@@ -896,7 +992,7 @@ def render_input() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 # =============================================================================
-#  LOADING — centered card with clean error handling
+#  LOADING
 # =============================================================================
 def render_loading() -> None:
     resume_text = st.session_state.get("resume_text", "")
@@ -940,8 +1036,8 @@ def render_loading() -> None:
           </div>
         </div>""", unsafe_allow_html=True)
 
-        slots = [st.empty() for _ in steps]
-        prog  = st.empty()
+        slots    = [st.empty() for _ in steps]
+        prog     = st.empty()
         err_slot = st.empty()
 
         def show_steps(done: int) -> None:
@@ -983,25 +1079,22 @@ def render_loading() -> None:
 
         if "error" in result:
             err = result.get("error", "unknown")
-
-            # Build a clean human-readable error message (no duplicated "Rate limited")
             if err == "rate_limited":
-                msg        = result.get("message", "Rate limit reached. Please wait and retry.")
                 title_text = "⏱ Rate limited"
-                body_text  = msg
-                hint_text  = "Groq free-tier limits reset in the time shown above. Hit the button below to go back and retry."
+                body_text  = result.get("message", "Rate limit reached. Please wait and retry.")
+                hint_text  = "Groq free-tier limits reset in the time shown above. Go back and retry."
             elif "analysis_quality_failure" in str(err):
                 title_text = "⚠ Extraction failed"
-                body_text  = "No skills could be extracted from the resume. Please check the resume text and try again."
-                hint_text  = "Tip: Paste the resume text directly instead of uploading a file."
+                body_text  = "No skills could be extracted. Please check the resume and try again."
+                hint_text  = "Tip: Paste the resume text directly instead of uploading."
             elif "parse_failed" in str(err):
                 title_text = "⚠ Parse failed"
-                body_text  = "The AI returned an unexpected response. This sometimes happens on first load."
-                hint_text  = "Tip: Try again — Groq is usually reliable on a second attempt."
+                body_text  = "The AI returned an unexpected response. Try again."
+                hint_text  = "Tip: Groq is usually reliable on a second attempt."
             else:
                 title_text = "✕ Analysis failed"
                 body_text  = str(err)[:120]
-                hint_text  = "If this keeps happening, check your GROQ_API_KEY and internet connection."
+                hint_text  = "Check your GROQ_API_KEY and internet connection."
 
             err_slot.markdown(f"""
             <div class="sf-error-card">
@@ -1293,7 +1386,7 @@ def render_tab_overview(res: dict) -> None:
             st.caption(f"Source: {sal.get('source','web')} · {sal.get('note','')}")
 
 # =============================================================================
-#  TAB: ROADMAP — with DAG at bottom
+#  TAB: ROADMAP
 # =============================================================================
 def render_tab_roadmap(res: dict) -> None:
     path = res["path"]
@@ -1316,7 +1409,6 @@ def render_tab_roadmap(res: dict) -> None:
 
     completed = set(st.session_state.get("completed", []))
 
-    # ── BUSINESS CASE ──
     roadmap_hrs    = _safe_int(im.get("roadmap_hours"))
     train_cost_inr = roadmap_hrs * 500
     hire_cost_inr  = 1000000
@@ -1363,7 +1455,6 @@ def render_tab_roadmap(res: dict) -> None:
                     f'{rem}h remaining · <strong style="color:var(--teal)">{weeks_ready(rem, hpd)}</strong></p>',
                     unsafe_allow_html=True)
 
-    # ── WEEK 1 PLAN ──
     rem_path = [m for m in path if m["id"] not in completed]
     wp_quick = weekly_plan(rem_path, float(hpd))
     if wp_quick:
@@ -1525,31 +1616,20 @@ def render_tab_roadmap(res: dict) -> None:
 
     if _dag_found:
         st.markdown('<div class="sf-dag-wrap">', unsafe_allow_html=True)
-        st.image(
-            _dag_found,
-            use_container_width=True,
-        )
+        st.image(_dag_found, use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
-        # Color key legend
         legend_items = [
-            ("#2dd4bf", "Python / Data"),
-            ("#a78bfa", "ML / AI"),
-            ("#f59e0b", "SQL"),
-            ("#f97316", "DevOps"),
-            ("#3b82f6", "Cloud"),
-            ("#4ade80", "Web / API"),
-            ("#f9a8d4", "HR"),
-            ("#6ee7b7", "Leadership"),
+            ("#2dd4bf", "Python / Data"), ("#a78bfa", "ML / AI"),
+            ("#f59e0b", "SQL"),           ("#f97316", "DevOps"),
+            ("#3b82f6", "Cloud"),         ("#4ade80", "Web / API"),
+            ("#f9a8d4", "HR"),            ("#6ee7b7", "Leadership"),
         ]
         dots = "".join(
             f'<span class="sf-dag-legend-item">'
             f'<span class="sf-dag-dot" style="background:{col}"></span>{lbl}</span>'
             for col, lbl in legend_items
         )
-        st.markdown(
-            f'<div class="sf-dag-legend">{dots}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown(f'<div class="sf-dag-legend">{dots}</div>', unsafe_allow_html=True)
     else:
         st.markdown(
             '<div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;'
