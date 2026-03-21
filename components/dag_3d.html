@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0b0d14; overflow:hidden; font-family:'DM Mono',monospace; }
+  #canvas { display:block; width:100%; height:100%; }
+
+  #legend {
+    position:absolute; top:12px; left:14px;
+    display:flex; flex-direction:column; gap:6px;
+    font-size:10px; color:#475569;
+  }
+  .leg-row { display:flex; align-items:center; gap:7px; }
+  .leg-dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+
+  #tooltip {
+    position:absolute; display:none; pointer-events:none;
+    background:rgba(19,23,32,0.97); border:1px solid rgba(45,212,191,0.3);
+    border-radius:8px; padding:10px 14px; font-size:11px; color:#94a3b8;
+    max-width:220px; line-height:1.6;
+  }
+  .tt-title { font-size:13px; font-weight:600; color:#f1f5f9; margin-bottom:4px; }
+  .tt-badge {
+    display:inline-block; padding:2px 7px; border-radius:3px;
+    font-size:10px; font-weight:600; margin-top:4px;
+  }
+
+  #controls {
+    position:absolute; bottom:12px; left:50%;
+    transform:translateX(-50%);
+    display:flex; gap:10px;
+  }
+  .ctrl-btn {
+    background:rgba(45,212,191,0.08); border:1px solid rgba(45,212,191,0.2);
+    color:#2dd4bf; font-family:'DM Mono',monospace; font-size:10px;
+    padding:5px 12px; border-radius:4px; cursor:pointer; transition:all 0.15s;
+  }
+  .ctrl-btn:hover { background:rgba(45,212,191,0.18); }
+
+  #info {
+    position:absolute; top:12px; right:14px;
+    font-size:10px; color:#2d3a52; text-align:right; line-height:1.8;
+  }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div id="legend">
+  <div class="leg-row"><div class="leg-dot" style="background:#ef4444"></div>Critical path</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#2dd4bf"></div>Required skill</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#f59e0b"></div>Preferred skill</div>
+  <div class="leg-row"><div class="leg-dot" style="background:#475569"></div>Prerequisite</div>
+</div>
+
+<div id="tooltip"></div>
+
+<div id="controls">
+  <button class="ctrl-btn" id="resetBtn">Reset view</button>
+  <button class="ctrl-btn" id="toggleSpin">Pause rotation</button>
+  <button class="ctrl-btn" id="critBtn">Highlight critical</button>
+</div>
+
+<div id="info">Drag to rotate · Scroll to zoom</div>
+
+<script>
+// ── DATA injected by Streamlit ──────────────────────────────────────
+const GRAPH_DATA = window.SKILLFORGE_DAG || {
+  nodes: [
+    {id:"WE04",label:"FastAPI Backend",skill:"FastAPI",level:"Intermediate",required:true, critical:false,hrs:8},
+    {id:"CL01",label:"Cloud Fundamentals",skill:"Cloud",level:"Beginner",required:false,critical:false,hrs:6},
+    {id:"CL02",label:"AWS Deep Dive",skill:"AWS",level:"Intermediate",required:true, critical:false,hrs:10},
+    {id:"DO01",label:"Linux & Bash",skill:"Linux",level:"Beginner",required:false,critical:true, hrs:6},
+    {id:"DO02",label:"Docker",skill:"Docker",level:"Intermediate",required:true, critical:true, hrs:7},
+    {id:"DO03",label:"Kubernetes",skill:"Kubernetes",level:"Advanced",required:false,critical:true, hrs:10},
+    {id:"DO04",label:"CI/CD",skill:"CI/CD",level:"Intermediate",required:false,critical:false,hrs:6},
+    {id:"SQL01",label:"SQL Fundamentals",skill:"SQL",level:"Beginner",required:true, critical:false,hrs:5},
+    {id:"LD01",label:"Communication",skill:"Communication",level:"Beginner",required:false,critical:false,hrs:4},
+    {id:"LD02",label:"Leadership",skill:"Leadership",level:"Intermediate",required:false,critical:false,hrs:6},
+  ],
+  edges: [
+    {src:"CL01",dst:"CL02"},
+    {src:"DO01",dst:"DO02"},
+    {src:"DO01",dst:"DO04"},
+    {src:"DO02",dst:"DO03"},
+    {src:"LD01",dst:"LD02"},
+  ]
+};
+
+// ── THREE.JS ────────────────────────────────────────────────────────
+const W = window.innerWidth, H = window.innerHeight;
+const canvas = document.getElementById('canvas');
+canvas.width  = W;
+canvas.height = H;
+
+const renderer = {
+  canvas, ctx: canvas.getContext('2d'),
+  W, H
+};
+
+// 3D node positions — force-directed layout
+const nodes  = GRAPH_DATA.nodes;
+const edges  = GRAPH_DATA.edges;
+const nodeMap = {};
+nodes.forEach(n => { nodeMap[n.id] = n; });
+
+// Assign initial 3D positions on a sphere
+nodes.forEach((n, i) => {
+  const phi   = Math.acos(-1 + (2 * i) / nodes.length);
+  const theta = Math.sqrt(nodes.length * Math.PI) * phi;
+  const r     = 180;
+  n.x = r * Math.sin(phi) * Math.cos(theta);
+  n.y = r * Math.sin(phi) * Math.sin(theta);
+  n.z = r * Math.cos(phi);
+  n.vx = n.vy = n.vz = 0;
+});
+
+// Force-directed simulation (3D)
+function simulate(iterations) {
+  const k  = 80;   // repulsion
+  const ks = 0.04; // spring
+  for (let iter = 0; iter < iterations; iter++) {
+    // Repulsion
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i+1; j < nodes.length; j++) {
+        const dx = nodes[i].x - nodes[j].x;
+        const dy = nodes[i].y - nodes[j].y;
+        const dz = nodes[i].z - nodes[j].z;
+        const d  = Math.sqrt(dx*dx + dy*dy + dz*dz) + 0.1;
+        const f  = k * k / d;
+        nodes[i].vx += f * dx / d;
+        nodes[i].vy += f * dy / d;
+        nodes[i].vz += f * dz / d;
+        nodes[j].vx -= f * dx / d;
+        nodes[j].vy -= f * dy / d;
+        nodes[j].vz -= f * dz / d;
+      }
+    }
+    // Attraction along edges
+    edges.forEach(e => {
+      const s  = nodeMap[e.src], t = nodeMap[e.dst];
+      if (!s || !t) return;
+      const dx = t.x - s.x, dy = t.y - s.y, dz = t.z - s.z;
+      const d  = Math.sqrt(dx*dx + dy*dy + dz*dz) + 0.1;
+      const f  = ks * (d - 120);
+      s.vx += f * dx / d; s.vy += f * dy / d; s.vz += f * dz / d;
+      t.vx -= f * dx / d; t.vy -= f * dy / d; t.vz -= f * dz / d;
+    });
+    // Dampen + apply
+    nodes.forEach(n => {
+      n.vx *= 0.85; n.vy *= 0.85; n.vz *= 0.85;
+      n.x  += n.vx;  n.y  += n.vy;  n.z  += n.vz;
+    });
+  }
+}
+simulate(300);
+
+// ── Camera / rotation ───────────────────────────────────────────────
+let rotY = 0, rotX = 0.3;
+let targetRotY = 0, targetRotX = 0.3;
+let spinning = true;
+let highlightCritical = false;
+let dragging = false, lastMX = 0, lastMY = 0;
+let zoom = 1.0;
+
+function project(x, y, z) {
+  // Rotate Y
+  const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
+  let rx = x * cosY - z * sinY;
+  let ry = y;
+  let rz = x * sinY + z * cosY;
+  // Rotate X
+  const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
+  let ry2 = ry * cosX - rz * sinX;
+  let rz2 = ry * sinX + rz * cosX;
+  // Perspective
+  const fov = 500 * zoom;
+  const scale = fov / (fov + rz2 + 300);
+  return {
+    sx: W/2 + rx * scale,
+    sy: H/2 + ry2 * scale,
+    scale,
+    depth: rz2
+  };
+}
+
+function nodeColor(n) {
+  if (highlightCritical) return n.critical ? '#ef4444' : 'rgba(71,85,105,0.4)';
+  if (n.critical)  return '#ef4444';
+  if (n.required)  return '#2dd4bf';
+  return '#f59e0b';
+}
+
+function edgeColor(e) {
+  const s = nodeMap[e.src], t = nodeMap[e.dst];
+  if (!s || !t) return 'rgba(71,85,105,0.3)';
+  if (s.critical && t.critical) return 'rgba(239,68,68,0.6)';
+  return 'rgba(71,85,105,0.25)';
+}
+
+function draw() {
+  const ctx = renderer.ctx;
+  ctx.clearRect(0, 0, W, H);
+
+  // Sort by depth for painter's algorithm
+  const projected = nodes.map(n => ({ n, p: project(n.x, n.y, n.z) }));
+  projected.sort((a, b) => a.p.depth - b.p.depth);
+
+  // Draw edges first
+  edges.forEach(e => {
+    const s = nodeMap[e.src], t = nodeMap[e.dst];
+    if (!s || !t) return;
+    const ps = project(s.x, s.y, s.z);
+    const pt = project(t.x, t.y, t.z);
+    ctx.beginPath();
+    ctx.moveTo(ps.sx, ps.sy);
+    ctx.lineTo(pt.sx, pt.sy);
+    ctx.strokeStyle = edgeColor(e);
+    ctx.lineWidth   = s.critical && t.critical ? 1.5 : 0.8;
+    ctx.stroke();
+
+    // Arrow head
+    const angle = Math.atan2(pt.sy - ps.sy, pt.sx - ps.sx);
+    const r     = (pt.scale * 14) + 2;
+    const ax = pt.sx - r * Math.cos(angle);
+    const ay = pt.sy - r * Math.sin(angle);
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax - 7 * Math.cos(angle - 0.4), ay - 7 * Math.sin(angle - 0.4));
+    ctx.lineTo(ax - 7 * Math.cos(angle + 0.4), ay - 7 * Math.sin(angle + 0.4));
+    ctx.closePath();
+    ctx.fillStyle = edgeColor(e);
+    ctx.fill();
+  });
+
+  // Draw nodes
+  projected.forEach(({ n, p }) => {
+    const r   = Math.max(6, 14 * p.scale);
+    const col = nodeColor(n);
+
+    // Glow for critical nodes
+    if (n.critical) {
+      ctx.beginPath();
+      ctx.arc(p.sx, p.sy, r * 2.2, 0, Math.PI * 2);
+      const grd = ctx.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, r * 2.2);
+      grd.addColorStop(0, 'rgba(239,68,68,0.22)');
+      grd.addColorStop(1, 'rgba(239,68,68,0)');
+      ctx.fillStyle = grd;
+      ctx.fill();
+    }
+
+    // Node circle
+    ctx.beginPath();
+    ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
+    ctx.fillStyle   = col;
+    ctx.globalAlpha = highlightCritical && !n.critical ? 0.25 : 0.9;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth   = 1;
+    ctx.stroke();
+
+    // Label
+    if (p.scale > 0.55) {
+      ctx.font      = `${Math.max(9, 11 * p.scale)}px 'DM Mono',monospace`;
+      ctx.fillStyle = highlightCritical && !n.critical ? 'rgba(71,85,105,0.5)' : '#94a3b8';
+      ctx.textAlign = 'center';
+      ctx.fillText(n.skill, p.sx, p.sy + r + 13 * p.scale);
+    }
+
+    // Hours badge on hover
+    if (n._hovered) {
+      ctx.font      = `bold ${Math.max(8,10*p.scale)}px 'DM Mono',monospace`;
+      ctx.fillStyle = '#f1f5f9';
+      ctx.textAlign = 'center';
+      ctx.fillText(n.hrs + 'h', p.sx, p.sy + 4 * p.scale);
+    }
+  });
+}
+
+// ── Animation loop ──────────────────────────────────────────────────
+let lastT = 0;
+function animate(t) {
+  requestAnimationFrame(animate);
+  const dt = (t - lastT) / 1000;
+  lastT = t;
+  if (spinning && !dragging) {
+    rotY += 0.004;
+  }
+  draw();
+}
+requestAnimationFrame(animate);
+
+// ── Mouse interaction ───────────────────────────────────────────────
+const tt = document.getElementById('tooltip');
+
+canvas.addEventListener('mousedown', e => {
+  dragging = true;
+  lastMX   = e.clientX;
+  lastMY   = e.clientY;
+});
+window.addEventListener('mouseup', () => { dragging = false; });
+window.addEventListener('mousemove', e => {
+  if (dragging) {
+    rotY += (e.clientX - lastMX) * 0.008;
+    rotX += (e.clientY - lastMY) * 0.006;
+    rotX  = Math.max(-1.2, Math.min(1.2, rotX));
+    lastMX = e.clientX;
+    lastMY = e.clientY;
+    return;
+  }
+  // Hover detection
+  const rect = canvas.getBoundingClientRect();
+  const mx   = e.clientX - rect.left;
+  const my   = e.clientY - rect.top;
+  let hit = null;
+  nodes.forEach(n => {
+    const p  = project(n.x, n.y, n.z);
+    const r  = Math.max(6, 14 * p.scale);
+    const dx = mx - p.sx, dy = my - p.sy;
+    if (Math.sqrt(dx*dx + dy*dy) < r + 6) {
+      hit = { n, p };
+    }
+    n._hovered = false;
+  });
+  if (hit) {
+    hit.n._hovered = true;
+    const badgeColor = hit.n.critical ? '#ef4444' : hit.n.required ? '#2dd4bf' : '#f59e0b';
+    const badgeLabel = hit.n.critical ? 'CRITICAL' : hit.n.required ? 'REQUIRED' : 'PREFERRED';
+    tt.innerHTML = `
+      <div class="tt-title">${hit.n.label}</div>
+      <div>Skill: ${hit.n.skill}</div>
+      <div>Level: ${hit.n.level} · ${hit.n.hrs}h</div>
+      <span class="tt-badge" style="background:${badgeColor}22;color:${badgeColor};border:1px solid ${badgeColor}44">${badgeLabel}</span>
+    `;
+    tt.style.display = 'block';
+    tt.style.left    = Math.min(e.clientX + 14, W - 240) + 'px';
+    tt.style.top     = Math.min(e.clientY - 10, H - 120) + 'px';
+    canvas.style.cursor = 'pointer';
+  } else {
+    tt.style.display = 'none';
+    canvas.style.cursor = 'grab';
+  }
+});
+
+canvas.addEventListener('wheel', e => {
+  zoom *= e.deltaY > 0 ? 0.93 : 1.07;
+  zoom  = Math.max(0.4, Math.min(2.5, zoom));
+  e.preventDefault();
+}, { passive: false });
+
+// ── Controls ────────────────────────────────────────────────────────
+document.getElementById('resetBtn').onclick = () => {
+  rotY = 0; rotX = 0.3; zoom = 1.0;
+};
+document.getElementById('toggleSpin').onclick = function() {
+  spinning = !spinning;
+  this.textContent = spinning ? 'Pause rotation' : 'Resume rotation';
+};
+document.getElementById('critBtn').onclick = function() {
+  highlightCritical = !highlightCritical;
+  this.textContent = highlightCritical ? 'Show all' : 'Highlight critical';
+  this.style.background = highlightCritical
+    ? 'rgba(239,68,68,0.18)' : 'rgba(45,212,191,0.08)';
+  this.style.borderColor = highlightCritical
+    ? 'rgba(239,68,68,0.4)' : 'rgba(45,212,191,0.2)';
+  this.style.color = highlightCritical ? '#ef4444' : '#2dd4bf';
+};
+
+window.addEventListener('resize', () => {
+  canvas.width  = renderer.W = window.innerWidth;
+  canvas.height = renderer.H = window.innerHeight;
+});
+</script>
+</body>
+</html>
