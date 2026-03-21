@@ -3,6 +3,14 @@
 > **ARTPARK CodeForge Hackathon 2025**
 > Intelligent skill-gap analysis and personalized learning pathway generation — powered by Groq LLaMA 3.3, NetworkX DAG, sentence-transformers, and a custom adaptive algorithm.
 
+## 🚀 Live Demo
+
+**Try it now → [skill-forge-345.streamlit.app](https://skill-forge-345.streamlit.app/)**
+
+No setup needed. Click any demo scenario on the landing page for instant results.
+
+---
+
 ---
 
 ## The Problem
