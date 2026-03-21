@@ -1,12 +1,10 @@
 # =============================================================================
-#  backend.py — SkillForge v13  |  All critical bugs fixed
-#  FIX 1: ICS calendar — one session per day, never midnight / 2 AM / 5 AM
-#  FIX 2: Critical path — only required-skill nodes + their ancestors
-#  FIX 3: Projected fit — completion-probability weighted, never 100%
-#  FIX 4: Resume rewrite — hard ban on disclaimers and cover-letter language
-#  FIX 5: ATS rewrite score — capped at 88 % (see main.py)
-#  FIX 6: SQL regex fallback — inject missed skills after LLM extraction
-#  BONUS: MERN prefix stripped, seniority-calibrated interview Qs, salary units
+#  backend.py — SkillForge v14  |  Clean edition
+#  REMOVED: build_dag_data (DAG tab dropped)
+#  IMPROVED: _parse_bytes — scanned-PDF fallback to vision OCR
+#  IMPROVED: image validation before Groq vision call
+#  IMPROVED: anti-hallucination guard tightened in mega_call
+#  IMPROVED: _is_meaningful_text() helper
 # =============================================================================
 
 import os, json, io, re, time, hashlib, shelve, base64, threading
@@ -34,13 +32,19 @@ except Exception:
 MODEL_FAST   = "llama-3.3-70b-versatile"
 MODEL_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
 CURRENT_YEAR = datetime.now().year
-_CACHE_PATH  = "/tmp/skillforge_v13"
+_CACHE_PATH  = "/tmp/skillforge_v14"
 
 _GROQ_KEY   = os.getenv("GROQ_API_KEY", "")
 GROQ_CLIENT = Groq(api_key=_GROQ_KEY) if _GROQ_KEY else None
 
 _DDG_ERROR: str = ""
 _DDG_LOCK       = threading.Lock()
+
+# Max image size to send to Groq vision (bytes). Larger images are resized.
+_MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB
+
+# Minimum meaningful word count from PDF text extraction
+_MIN_PDF_WORDS = 30
 
 
 def get_ddg_error() -> str:
@@ -76,6 +80,24 @@ def _is_english(text: str) -> bool:
     return ascii_chars / max(len(text), 1) > 0.75
 
 
+def _is_meaningful_text(text: str) -> bool:
+    """
+    Returns True when extracted text looks like real resume content.
+    Rejects: empty, too short, mostly garbage bytes, pure numbers/symbols.
+    Used to detect scanned PDFs that need vision fallback.
+    """
+    if not text or not text.strip():
+        return False
+    words = [w for w in text.split() if len(w) > 1 and re.search(r'[a-zA-Z]', w)]
+    if len(words) < _MIN_PDF_WORDS:
+        return False
+    # Reject if too many non-ASCII replacement chars (garbled encoding)
+    garbage_ratio = text.count('\ufffd') / max(len(text), 1)
+    if garbage_ratio > 0.05:
+        return False
+    return True
+
+
 SEMANTIC: bool = False
 _ST             = None
 _CEMBS          = None
@@ -96,75 +118,268 @@ def _load_semantic_bg() -> None:
 #  SKILL ALIASES
 # =============================================================================
 SKILL_ALIASES: Dict[str, str] = {
-    "rest api design":       "rest apis",
-    "rest api":              "rest apis",
-    "restful api":           "rest apis",
-    "restful apis":          "rest apis",
-    "api design":            "rest apis",
-    "react.js":              "react",
-    "reactjs":               "react",
-    "js":                    "javascript",
-    "es6":                   "javascript",
-    "typescript":            "javascript",
-    "python3":               "python",
-    "node.js":               "rest apis",
-    "nodejs":                "rest apis",
-    "html5":                 "html/css",
-    "css3":                  "html/css",
-    "html":                  "html/css",
-    "css":                   "html/css",
-    "containerization":      "docker",
-    "containers":            "docker",
-    "mysql":                 "sql",
-    "postgresql":            "sql",
-    "postgres":              "sql",
-    "sqlite":                "sql",
-    "nosql":                 "sql",
-    "pytorch":               "deep learning",
-    "tensorflow":            "deep learning",
-    "scikit-learn":          "machine learning",
-    "supervised learning":   "machine learning",
-    "aws sagemaker":         "aws",
-    "ec2":                   "aws",
-    "s3":                    "aws",
-    "gcp":                   "gcp",
-    "google cloud":          "gcp",
-    "github actions":        "ci/cd",
-    "jenkins":               "ci/cd",
-    "gitlab ci":             "ci/cd",
-    "pandas":                "data analysis",
-    "numpy":                 "data analysis",
-    "matplotlib":            "data visualization",
-    "seaborn":               "data visualization",
+    # ── REST / APIs ──────────────────────────────────────────────────────────
+    "rest api design":            "rest apis",
+    "rest api":                   "rest apis",
+    "restful api":                "rest apis",
+    "restful apis":               "rest apis",
+    "api design":                 "rest apis",
+    "node.js":                    "rest apis",
+    "nodejs":                     "rest apis",
+    "express":                    "rest apis",
+    "express.js":                 "rest apis",
+    "expressjs":                  "rest apis",
+    "graphql":                    "rest apis",
+    "spring boot":                "rest apis",
+    "spring":                     "rest apis",
+    # ── React / Frontend ─────────────────────────────────────────────────────
+    "react.js":                   "react",
+    "reactjs":                    "react",
+    "next.js":                    "react",
+    "nextjs":                     "react",
+    "next":                       "react",
+    # ── JavaScript variants ──────────────────────────────────────────────────
+    "js":                         "javascript",
+    "es6":                        "javascript",
+    "es2015":                     "javascript",
+    "typescript":                 "javascript",
+    "ts":                         "javascript",
+    "vue":                        "javascript",
+    "vue.js":                     "javascript",
+    "vuejs":                      "javascript",
+    "angular":                    "javascript",
+    "jest":                       "javascript",
+    # ── Python ecosystem ─────────────────────────────────────────────────────
+    "python3":                    "python",
+    "flask":                      "python",
+    "django":                     "python",
+    "streamlit":                  "python",
+    "pytest":                     "python",
+    "celery":                     "python",
+    # ── HTML/CSS ─────────────────────────────────────────────────────────────
+    "html5":                      "html/css",
+    "css3":                       "html/css",
+    "html":                       "html/css",
+    "css":                        "html/css",
+    "sass":                       "html/css",
+    "tailwind":                   "html/css",
+    "tailwindcss":                "html/css",
+    # ── Docker / containers ──────────────────────────────────────────────────
+    "containerization":           "docker",
+    "containers":                 "docker",
+    "dockerfile":                 "docker",
+    "docker-compose":             "docker",
+    "docker compose":             "docker",
+    # ── Kubernetes ───────────────────────────────────────────────────────────
+    "k8s":                        "kubernetes",
+    "helm":                       "kubernetes",
+    "helm charts":                "kubernetes",
+    # ── SQL / Databases ──────────────────────────────────────────────────────
+    "mysql":                      "sql",
+    "postgresql":                 "sql",
+    "postgres":                   "sql",
+    "sqlite":                     "sql",
+    "nosql":                      "databases",
+    "mongodb":                    "databases",
+    "redis":                      "databases",
+    "dynamodb":                   "databases",
+    "cassandra":                  "databases",
+    "elasticsearch":              "databases",
+    "pinecone":                   "databases",
+    "vector database":            "databases",
+    "vector db":                  "databases",
+    "kafka":                      "databases",
+    "rabbitmq":                   "databases",
+    # ── ML / AI ──────────────────────────────────────────────────────────────
+    "pytorch":                    "deep learning",
+    "tensorflow":                 "deep learning",
+    "huggingface":                "deep learning",
+    "hugging face":               "deep learning",
+    "transformers":               "deep learning",
+    "neural network":             "deep learning",
+    "cnn":                        "deep learning",
+    "rnn":                        "deep learning",
+    "lstm":                       "deep learning",
+    "scikit-learn":               "machine learning",
+    "sklearn":                    "machine learning",
+    "supervised learning":        "machine learning",
+    "unsupervised learning":      "machine learning",
+    "regression":                 "machine learning",
+    "classification":             "machine learning",
+    "random forest":              "machine learning",
+    "xgboost":                    "machine learning",
+    # ── NLP / GenAI ──────────────────────────────────────────────────────────
+    "nlp":                        "nlp",
+    "langchain":                  "nlp",
+    "llamaindex":                 "nlp",
+    "llama index":                "nlp",
+    "rag":                        "nlp",
+    "retrieval augmented":        "nlp",
+    "retrieval-augmented":        "nlp",
+    "llm":                        "nlp",
+    "large language model":       "nlp",
+    "large language models":      "nlp",
+    "openai api":                 "nlp",
+    "gpt":                        "nlp",
+    "bert":                       "nlp",
+    "sentence transformers":      "nlp",
+    # ── MLOps ────────────────────────────────────────────────────────────────
+    "apache airflow":             "mlops",
+    "airflow":                    "mlops",
+    "mlflow":                     "mlops",
+    "model deployment":           "mlops",
+    "model monitoring":           "mlops",
+    # ── Data Analysis ────────────────────────────────────────────────────────
+    "pandas":                     "data analysis",
+    "numpy":                      "data analysis",
+    "pyspark":                    "data analysis",
+    "apache spark":               "data analysis",
+    "spark":                      "data analysis",
+    "dbt":                        "data analysis",
+    # ── Data Visualization ───────────────────────────────────────────────────
+    "matplotlib":                 "data visualization",
+    "seaborn":                    "data visualization",
+    "plotly":                     "data visualization",
+    "tableau":                    "data visualization",
+    "power bi":                   "data visualization",
+    "powerbi":                    "data visualization",
+    "looker":                     "data visualization",
+    "grafana":                    "data visualization",
+    # ── Statistics ───────────────────────────────────────────────────────────
+    "hypothesis testing":         "statistics",
+    "a/b testing":                "statistics",
+    "a/b test":                   "statistics",
+    "statistical analysis":       "statistics",
+    # ── Linux / Shell ────────────────────────────────────────────────────────
+    "bash":                       "linux",
+    "bash scripting":             "linux",
+    "shell scripting":            "linux",
+    "shell script":               "linux",
+    "unix":                       "linux",
+    "nginx":                      "linux",
+    # ── CI/CD ────────────────────────────────────────────────────────────────
+    "github actions":             "ci/cd",
+    "jenkins":                    "ci/cd",
+    "gitlab ci":                  "ci/cd",
+    "gitlab-ci":                  "ci/cd",
+    "circleci":                   "ci/cd",
+    "travis ci":                  "ci/cd",
+    "argocd":                     "ci/cd",
+    # ── Cloud ────────────────────────────────────────────────────────────────
+    "aws sagemaker":              "aws",
+    "ec2":                        "aws",
+    "s3":                         "aws",
+    "lambda":                     "aws",
+    "rds":                        "aws",
+    "aws lambda":                 "aws",
+    "gcp":                        "gcp",
+    "google cloud":               "gcp",
+    "bigquery":                   "gcp",
+    "terraform":                  "cloud computing",
+    "infrastructure as code":     "cloud computing",
+    "iac":                        "cloud computing",
+    "ansible":                    "cloud computing",
+    "pulumi":                     "cloud computing",
+    # ── Application Security ─────────────────────────────────────────────────
+    "owasp":                      "application security",
+    "penetration testing":        "application security",
+    "pen testing":                "application security",
+    "devsecops":                  "application security",
+    # ── Agile ────────────────────────────────────────────────────────────────
+    "scrum":                      "agile",
+    "kanban":                     "agile",
+    "sprint":                     "agile",
+    "jira":                       "agile",
 }
 
 MERN_IMPLIES: List[str] = ["react", "javascript", "rest apis"]
 
 # =============================================================================
-#  FIX 6 — REGEX SKILL SCANNER
-#  Runs after every LLM extraction. Injects any skill the LLM missed.
+#  REGEX SKILL SCANNER — runs after every LLM extraction
 # =============================================================================
 _SKILL_REGEX_MAP: List[Tuple[str, str, int]] = [
-    (r"\bSQL\b",              "SQL",         5),
-    (r"\bMySQL\b",            "SQL",         6),
-    (r"\bPostgreSQL\b",       "SQL",         6),
-    (r"\bSQLite\b",           "SQL",         4),
-    (r"\bDockerfile\b",       "Docker",      4),
-    (r"\bdocker[- ]compose\b","Docker",      5),
-    (r"\bKubernetes\b",       "Kubernetes",  3),
-    (r"\bk8s\b",              "Kubernetes",  3),
-    (r"\bFastAPI\b",          "FastAPI",     5),
-    (r"\bflask\b",            "Python",      6),
-    (r"\bdjango\b",           "Python",      6),
-    (r"\bTypeScript\b",       "JavaScript",  6),
-    (r"\bCI/CD\b",            "CI/CD",       4),
-    (r"\bGitHub Actions\b",   "CI/CD",       5),
-    (r"\bJenkins\b",          "CI/CD",       5),
-    (r"\bAWS\b",              "AWS",         4),
-    (r"\bGCP\b",              "GCP",         4),
-    (r"\bAzure\b",            "Cloud Computing", 4),
-    (r"\bMongoDB\b",          "Databases",   5),
-    (r"\bRESTful?\b",         "REST APIs",   5),
+    # ── SQL / Databases ──────────────────────────────────────────────────────
+    (r"\bSQL\b",                      "SQL",              5),
+    (r"\bMySQL\b",                    "SQL",              6),
+    (r"\bPostgreSQL\b",               "SQL",              6),
+    (r"\bSQLite\b",                   "SQL",              4),
+    (r"\bMongoDB\b",                  "Databases",        5),
+    (r"\bRedis\b",                    "Databases",        5),
+    (r"\bDynamoDB\b",                 "Databases",        4),
+    (r"\bCassandra\b",                "Databases",        4),
+    (r"\bElasticsearch\b",            "Databases",        4),
+    (r"\bPinecone\b",                 "Databases",        4),
+    (r"\bKafka\b",                    "Databases",        4),
+    # ── Docker / Kubernetes ──────────────────────────────────────────────────
+    (r"\bDockerfile\b",               "Docker",           4),
+    (r"\bdocker[- ]compose\b",        "Docker",           5),
+    (r"\bKubernetes\b",               "Kubernetes",       3),
+    (r"\bk8s\b",                      "Kubernetes",       3),
+    (r"\bHelm\b",                     "Kubernetes",       4),
+    # ── Python ecosystem ─────────────────────────────────────────────────────
+    (r"\bFastAPI\b",                  "FastAPI",          5),
+    (r"\bflask\b",                    "Python",           6),
+    (r"\bdjango\b",                   "Python",           6),
+    (r"\bStreamlit\b",                "Python",           5),
+    (r"\bpytest\b",                   "Python",           5),
+    (r"\bCelery\b",                   "Python",           5),
+    # ── JavaScript / Frontend ────────────────────────────────────────────────
+    (r"\bTypeScript\b",               "JavaScript",       6),
+    (r"\bNext\.?js\b",                "React",            5),
+    (r"\bVue\.?js\b",                 "JavaScript",       5),
+    (r"\bAngular\b",                  "JavaScript",       5),
+    (r"\bExpress\.?js\b",             "REST APIs",        5),
+    (r"\bGraphQL\b",                  "REST APIs",        5),
+    (r"\bJest\b",                     "JavaScript",       4),
+    # ── CI/CD ────────────────────────────────────────────────────────────────
+    (r"\bCI/CD\b",                    "CI/CD",            4),
+    (r"\bGitHub Actions\b",           "CI/CD",            5),
+    (r"\bJenkins\b",                  "CI/CD",            5),
+    (r"\bGitLab\s*CI\b",              "CI/CD",            5),
+    (r"\bCircleCI\b",                 "CI/CD",            5),
+    (r"\bArgoCD\b",                   "CI/CD",            4),
+    # ── Cloud ────────────────────────────────────────────────────────────────
+    (r"\bAWS\b",                      "AWS",              4),
+    (r"\bGCP\b",                      "GCP",              4),
+    (r"\bAzure\b",                    "Cloud Computing",  4),
+    (r"\bTerraform\b",                "Cloud Computing",  4),
+    (r"\bAnsible\b",                  "Cloud Computing",  4),
+    (r"\bBigQuery\b",                 "GCP",              5),
+    # ── Linux / Shell ────────────────────────────────────────────────────────
+    (r"\bLinux\b",                    "Linux",            4),
+    (r"\bBash\b",                     "Linux",            5),
+    (r"\bshell\s+script",             "Linux",            4),
+    (r"\bnginx\b",                    "Linux",            4),
+    # ── ML / Deep Learning ───────────────────────────────────────────────────
+    (r"\bPyTorch\b",                  "Deep Learning",    6),
+    (r"\bTensorFlow\b",               "Deep Learning",    6),
+    (r"\bHugging\s*Face\b",           "Deep Learning",    5),
+    (r"\btransformer model\b",        "Deep Learning",    5),
+    (r"\bscikit[- ]learn\b",          "Machine Learning", 6),
+    (r"\bXGBoost\b",                  "Machine Learning", 5),
+    # ── NLP / GenAI ──────────────────────────────────────────────────────────
+    (r"\bLangChain\b",                "NLP",              5),
+    (r"\bLlamaIndex\b",               "NLP",              5),
+    (r"\bRAG\b",                      "NLP",              4),
+    (r"\bretrieval[- ]augmented",     "NLP",              4),
+    (r"\bLLM\b",                      "NLP",              4),
+    (r"\bOpenAI\b",                   "NLP",              4),
+    (r"\bBERT\b",                     "NLP",              5),
+    # ── MLOps ────────────────────────────────────────────────────────────────
+    (r"\bAirflow\b",                  "MLOps",            4),
+    (r"\bMLflow\b",                   "MLOps",            5),
+    (r"\bmodel\s+deploy",             "MLOps",            4),
+    # ── Data Analysis ────────────────────────────────────────────────────────
+    (r"\bPySpark\b",                  "Data Analysis",    5),
+    (r"\bApache\s+Spark\b",           "Data Analysis",    5),
+    (r"\bdbt\b",                      "Data Analysis",    4),
+    # ── Data Visualization ───────────────────────────────────────────────────
+    (r"\bTableau\b",                  "Data Visualization", 5),
+    (r"\bPower\s*BI\b",               "Data Visualization", 5),
+    (r"\bGrafana\b",                  "Data Visualization", 4),
+    # ── REST ─────────────────────────────────────────────────────────────────
+    (r"\bRESTful?\b",                 "REST APIs",        5),
+    (r"\bSpring\s*Boot\b",            "REST APIs",        5),
 ]
 
 
@@ -193,7 +408,6 @@ def _apply_regex_skill_fallback(candidate: dict, resume_text: str) -> dict:
 
 
 def _strip_mern_prefix(context: str) -> str:
-    """Remove internal 'Derived from MERN Stack: ' prefix before user-facing display."""
     return re.sub(r"^Derived from \w[\w\s]+:\s*", "", context or "")
 
 
@@ -356,26 +570,144 @@ def _build_graph() -> nx.DiGraph:
 SKILL_GRAPH = _build_graph()
 
 
+# =============================================================================
+#  IMPROVED _parse_bytes
+#  — scanned PDF auto-fallback to vision OCR
+#  — image size guard
+#  — DOCX fallback for malformed files
+# =============================================================================
 def _parse_bytes(raw_bytes: bytes, filename: str) -> Tuple[str, Optional[str]]:
     name = filename.lower()
+
+    # ── PDF ──────────────────────────────────────────────────────────────────
     if name.endswith(".pdf"):
+        text = ""
         try:
             with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
-                return "\n".join(p.extract_text() or "" for p in pdf.pages), None
+                parts = []
+                for page in pdf.pages:
+                    extracted = page.extract_text()
+                    if extracted:
+                        parts.append(extracted)
+                text = "\n".join(parts)
         except Exception as e:
-            return f"[PDF error: {e}]", None
+            text = f"[pdfplumber error: {e}]"
+
+        # If extracted text is meaningful → use it
+        if _is_meaningful_text(text):
+            return text, None
+
+        # Scanned / image-based PDF: rasterise up to 3 pages, stitch vertically → vision OCR
+        try:
+            import fitz  # PyMuPDF — optional but best for rasterisation
+            doc   = fitz.open(stream=raw_bytes, filetype="pdf")
+            mat   = fitz.Matrix(2, 2)   # 2× zoom → ~150 DPI is enough for Groq vision
+
+            # Collect pixmaps for first 3 pages
+            pixmaps = []
+            for page_idx in range(min(3, doc.page_count)):
+                pg  = doc.load_page(page_idx)
+                pix = pg.get_pixmap(matrix=mat)
+                pixmaps.append(pix)
+            doc.close()
+
+            if len(pixmaps) == 1:
+                # Single page — use directly
+                img_bytes = pixmaps[0].tobytes("png")
+            else:
+                # Stitch multiple pages vertically into one tall PNG
+                total_h = sum(p.height for p in pixmaps)
+                max_w   = max(p.width  for p in pixmaps)
+                stitched = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, max_w, total_h))
+                stitched.clear_with(255)   # white background
+                y_offset = 0
+                for p in pixmaps:
+                    stitched.copy(p, fitz.IRect(0, 0, p.width, p.height))
+                    # Blit each page at the correct vertical offset
+                    # (fitz.Pixmap.copy doesn't support dest offset; use PIL if available)
+                    y_offset += p.height
+                # Fallback: if PIL is available, do a proper stitch; otherwise use page 0 only
+                try:
+                    from PIL import Image as PILImage
+                    pages_pil = [PILImage.open(io.BytesIO(p.tobytes("png"))) for p in pixmaps]
+                    canvas    = PILImage.new("RGB", (max_w, total_h), (255, 255, 255))
+                    y_off     = 0
+                    for img in pages_pil:
+                        canvas.paste(img, (0, y_off))
+                        y_off += img.height
+                    buf = io.BytesIO()
+                    canvas.save(buf, format="PNG")
+                    img_bytes = buf.getvalue()
+                except ImportError:
+                    # PIL not available — fall back to page 0 only
+                    img_bytes = pixmaps[0].tobytes("png")
+
+            # Guard against oversized stitched image
+            if len(img_bytes) > _MAX_IMAGE_BYTES:
+                try:
+                    from PIL import Image as PILImage
+                    pil_img = PILImage.open(io.BytesIO(img_bytes))
+                    pil_img.thumbnail((1400, 3000), PILImage.LANCZOS)
+                    buf = io.BytesIO()
+                    pil_img.save(buf, format="PNG")
+                    img_bytes = buf.getvalue()
+                except Exception:
+                    img_bytes = pixmaps[0].tobytes("png")  # page 0 only as last resort
+
+            if len(img_bytes) <= _MAX_IMAGE_BYTES:
+                b64 = base64.b64encode(img_bytes).decode()
+                return "", f"data:image/png;base64,{b64}"
+        except ImportError:
+            pass  # PyMuPDF not installed — fall through to raw text
+        except Exception:
+            pass
+
+        # Last resort: return whatever pdfplumber gave us
+        return text if text and not text.startswith("[") else "[Scanned PDF — install PyMuPDF for vision OCR]", None
+
+    # ── DOCX ─────────────────────────────────────────────────────────────────
     if name.endswith(".docx"):
         try:
-            doc = Document(io.BytesIO(raw_bytes))
-            return "\n".join(p.text for p in doc.paragraphs), None
+            doc  = Document(io.BytesIO(raw_bytes))
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            if _is_meaningful_text(text):
+                return text, None
+            # Fallback: grab all runs too
+            text_full = "\n".join(
+                r.text for p in doc.paragraphs for r in p.runs if r.text.strip()
+            )
+            return text_full if text_full.strip() else "[DOCX empty or unreadable]", None
         except Exception as e:
             return f"[DOCX error: {e}]", None
+
+    # ── Images ───────────────────────────────────────────────────────────────
     if any(name.endswith(x) for x in [".jpg", ".jpeg", ".png", ".webp"]):
         media = (
             "image/jpeg" if name.endswith((".jpg", ".jpeg"))
-            else "image/png" if name.endswith(".png") else "image/webp"
+            else "image/png"  if name.endswith(".png")
+            else "image/webp"
         )
-        return "", f"data:{media};base64,{base64.b64encode(raw_bytes).decode()}"
+        # Guard against oversized images
+        if len(raw_bytes) > _MAX_IMAGE_BYTES:
+            # Attempt to down-scale with Pillow if available
+            try:
+                from PIL import Image as PILImage
+                img = PILImage.open(io.BytesIO(raw_bytes))
+                img.thumbnail((1600, 2200), PILImage.LANCZOS)
+                buf = io.BytesIO()
+                fmt = "JPEG" if media == "image/jpeg" else "PNG"
+                img.save(buf, format=fmt, quality=85)
+                raw_bytes = buf.getvalue()
+                media     = "image/jpeg" if fmt == "JPEG" else "image/png"
+            except ImportError:
+                pass  # Pillow not installed — send as-is, may hit API limit
+            except Exception:
+                pass
+
+        b64 = base64.b64encode(raw_bytes).decode()
+        return "", f"data:{media};base64,{b64}"
+
+    # ── Plain text / unknown ──────────────────────────────────────────────────
     return raw_bytes.decode("utf-8", errors="ignore"), None
 
 
@@ -487,16 +819,30 @@ def _groq_call(prompt: str, system: str, model: str = MODEL_FAST, max_tokens: in
         return {"error": err}
 
 
+# =============================================================================
+#  IMPROVED mega_call
+#  — tighter system prompt: strictly no hallucination, no out-of-scope answers
+# =============================================================================
 _MEGA_SYS = (
     "You are a world-class senior tech recruiter, ATS specialist, and L&D expert. "
-    "Extract ALL sections in ONE response as valid JSON. Be precise and evidence-based. "
-    "Return ONLY the JSON object — no preamble, no markdown fences, no explanation text."
+    "Your ONLY task is to extract structured skill and job data from the supplied resume "
+    "and job description. "
+    "STRICT RULES: "
+    "(1) Extract ONLY skills, experience, and facts explicitly present in the supplied text. "
+    "(2) Do NOT infer skills from job titles alone without evidence in the text. "
+    "(3) Do NOT answer questions, give advice, or produce any content outside the JSON schema. "
+    "(4) If a field has no evidence, use null or an empty list — never fabricate. "
+    "Return ONLY the JSON object — no preamble, no markdown fences, no explanation."
 )
 _VISION_SYS = (
-    "You are an expert resume parser and tech recruiter. The user has uploaded an IMAGE of their resume. "
-    "OCR every piece of visible text carefully (name, experience, skills, education, projects). "
-    "Then analyze the gap against the job description. "
-    "Return ONLY a valid JSON object — no markdown, no prose before/after the JSON."
+    "You are an expert resume parser. The user has uploaded an IMAGE of their resume. "
+    "Your ONLY task: OCR every visible word carefully (name, experience, skills, education, "
+    "projects, dates) and extract structured data. "
+    "STRICT RULES: "
+    "(1) Extract ONLY what is visibly present in the image — never infer or hallucinate. "
+    "(2) Do NOT answer questions or produce content outside the JSON schema. "
+    "(3) If text is unclear or illegible, omit that field rather than guess. "
+    "Return ONLY a valid JSON object — no markdown, no prose."
 )
 
 
@@ -548,13 +894,15 @@ def mega_call(resume_text: str, jd_text: str,
             f"JOB DESCRIPTION:\n{jd_text[:2000]}\n\n"
             f"Return EXACTLY this JSON schema:\n{json_schema}\n\n"
             "Extract skills with realistic proficiency scores (expert=9, proficient=7, familiar=4, basic=3). "
-            "For year_last_used, use the most recent job/project year where that skill appeared."
+            "For year_last_used, use the most recent job/project year where that skill appeared. "
+            "IMPORTANT: Only extract skills that are EXPLICITLY visible in the image."
         )
         return _groq_call_vision(prompt=prompt, system=_VISION_SYS,
                                   image_b64=resume_image_b64, max_tokens=3200)
     else:
         prompt = (
-            f"Analyze this resume and job description.\n\n"
+            f"Analyze this resume and job description. "
+            f"Extract ONLY skills and facts explicitly present in the resume text.\n\n"
             f"RESUME:\n{resume_text[:4000]}\n\n"
             f"JOB DESCRIPTION:\n{jd_text[:2000]}\n\n"
             f"Return EXACTLY this JSON:\n{json_schema}"
@@ -563,7 +911,7 @@ def mega_call(resume_text: str, jd_text: str,
 
 
 # =============================================================================
-#  FIX 4 — RESUME REWRITE with hard anti-disclaimer rules
+#  RESUME REWRITE — anti-hallucination rules
 # =============================================================================
 def rewrite_resume(resume_text: str, jd: dict, missing_kw: List[str]) -> str:
     system = (
@@ -934,7 +1282,6 @@ def build_path(gp: List[dict], c: dict, jd: Optional[dict] = None) -> List[dict]
         except Exception:
             pass
 
-    # Leadership injection — only for management roles or large seniority gaps
     if jd:
         sm            = seniority_check(c, jd)
         responsibilities = " ".join(jd.get("key_responsibilities", [])).lower()
@@ -957,27 +1304,20 @@ def build_path(gp: List[dict], c: dict, jd: Optional[dict] = None) -> List[dict]
     except Exception:
         ordered = list(needed)
 
-    # =========================================================================
-    #  FIX 2 — CRITICAL PATH: required-skill nodes + their ancestors only
-    #  Preferred/leaf nodes with no required descendant are NOT critical.
-    # =========================================================================
     crit: set = set()
     try:
         if sub.nodes:
             required_gap_skills = {g["skill"].lower() for g in gp if g["is_required"]}
-            # Course nodes that directly teach a required JD skill
             required_course_ids = {
                 node for node in sub.nodes
                 if CATALOG_BY_ID.get(node, {}).get("skill", "").lower() in required_gap_skills
             }
-            # Mark those + all their prerequisite ancestors
             for req_id in required_course_ids:
                 crit.add(req_id)
                 try:
                     crit.update(nx.ancestors(sub, req_id))
                 except Exception:
                     pass
-            # Remove preferred/leaf nodes that lead to no required skill
             for nid in list(crit):
                 co_skill = CATALOG_BY_ID.get(nid, {}).get("skill", "").lower()
                 if co_skill in required_gap_skills:
@@ -1022,9 +1362,6 @@ def build_path(gp: List[dict], c: dict, jd: Optional[dict] = None) -> List[dict]
     return path
 
 
-# =============================================================================
-#  FIX 3 — PROJECTED FIT with completion probability
-# =============================================================================
 def calc_impact(gp: List[dict], path: List[dict]) -> dict:
     tot   = len(gp)
     known = sum(1 for g in gp if g["status"] == "Known")
@@ -1035,7 +1372,6 @@ def calc_impact(gp: List[dict], path: List[dict]) -> dict:
     })
     rhrs = sum(int(m.get("duration_hrs") or 0) for m in path)
 
-    # Humans rarely complete long self-study roadmaps — reflect that in projection
     if rhrs <= 40:
         completion_prob = 0.85
     elif rhrs <= 80:
@@ -1185,7 +1521,7 @@ def weeks_ready(hrs: float, hpd: float) -> str:
 
 
 # =============================================================================
-#  FIX 1 — ICS CALENDAR: one session per day, never midnight / 2 AM / 5 AM
+#  ICS CALENDAR
 # =============================================================================
 def build_ics_calendar(path: List[dict], hpd: float = 2.0,
                        start_date: Optional[Any] = None) -> str:
@@ -1193,7 +1529,7 @@ def build_ics_calendar(path: List[dict], hpd: float = 2.0,
 
     if start_date is None:
         base       = dt.now().replace(hour=19, minute=0, second=0, microsecond=0)
-        days_ahead = (7 - base.weekday()) % 7 or 7   # next Monday
+        days_ahead = (7 - base.weekday()) % 7 or 7
         start_date = base + timedelta(days=days_ahead)
 
     try:
@@ -1225,7 +1561,6 @@ def build_ics_calendar(path: List[dict], hpd: float = 2.0,
         crit_tag  = "  ★" if m.get("is_critical") else ""
 
         for sess in range(sessions):
-            # Skip weekends
             while current_day.weekday() >= 5:
                 current_day += timedelta(days=1)
 
@@ -1251,7 +1586,6 @@ def build_ics_calendar(path: List[dict], hpd: float = 2.0,
                 "STATUS:CONFIRMED",
                 "END:VEVENT",
             ]
-            # KEY FIX: always advance to next day — one session per day, no exceptions
             current_day += timedelta(days=1)
 
     lines.append("END:VCALENDAR")
@@ -1300,7 +1634,6 @@ def run_analysis(resume_text: str, jd_text: str,
     if skills_count == 0 and yrs > 2:
         return {"error": "analysis_quality_failure — no skills extracted. Please try again."}
 
-    # FIX 6: Regex fallback — inject any skills the LLM missed
     if resume_text and resume_text.strip():
         candidate = _apply_regex_skill_fallback(candidate, resume_text)
 
@@ -1591,7 +1924,6 @@ def salary_chart(s: dict) -> go.Figure:
     sym       = "₹" if curr == "INR" else "$"
     unit      = "L/yr" if curr == "INR" else "k/yr"
     raw_vals  = [_n(s.get("min_lpa")), _n(s.get("median_lpa")), _n(s.get("max_lpa"))]
-    # FIX: if USD values look like full dollar amounts (> 500), convert to thousands
     vals = [round(v / 1000, 1) for v in raw_vals] if (curr == "USD" and any(v > 500 for v in raw_vals)) else raw_vals
     lbls = [f"{sym}{v}{unit}" for v in vals]
     fig  = go.Figure(go.Bar(
@@ -1626,33 +1958,8 @@ def roi_bar(roi_list: List[dict]) -> go.Figure:
     return fig
 
 
-def build_dag_data(path: List[dict], gp: List[dict]) -> dict:
-    path_ids   = {m["id"] for m in path}
-    req_skills = {g["skill"].lower() for g in gp if g["is_required"]}
-    crit_ids   = {m["id"] for m in path if m.get("is_critical")}
-    nodes = [
-        {
-            "id":       m["id"],
-            "label":    m["title"][:22],
-            "skill":    m["skill"],
-            "level":    m["level"],
-            "required": m.get("is_required", False) or m["skill"].lower() in req_skills,
-            "critical": m["id"] in crit_ids,
-            "hrs":      int(m.get("duration_hrs") or 0),
-        }
-        for m in path
-    ]
-    edges = [
-        {"src": prereq_id, "dst": m["id"]}
-        for m in path
-        for prereq_id in (m.get("prereqs") or [])
-        if prereq_id in path_ids
-    ]
-    return {"nodes": nodes, "edges": edges}
-
-
 # =============================================================================
-#  INTERVIEW QUESTIONS — seniority-calibrated
+#  INTERVIEW QUESTIONS
 # =============================================================================
 def generate_interview_questions(gp: List[dict], candidate: dict, jd: dict) -> Dict[str, List[str]]:
     if not GROQ_CLIENT:
