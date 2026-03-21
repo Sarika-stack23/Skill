@@ -31,6 +31,8 @@ Upload a **resume** + **job description**. SkillForge:
 | 🧠 Senior DS → Lead AI | Skill decay on NLP/MLOps, strategic modules, high starting fit |
 | 👔 HR Coordinator → Manager | Non-tech domain, people management, leadership injection |
 
+Demo scenarios are available as one-click buttons on the landing page — no file upload needed.
+
 ---
 
 ## Architecture
@@ -41,6 +43,7 @@ Resume (PDF / DOCX / Image) + Job Description
               ▼
      ┌─────────────────┐
      │   File Parser   │  pdfplumber · python-docx · base64 image
+     │                 │  scanned-PDF → PyMuPDF rasterise → vision OCR
      └────────┬────────┘
               │ raw text / image_b64
               ▼
@@ -55,6 +58,7 @@ Resume (PDF / DOCX / Image) + Job Description
      ┌─────────────────────────┐
      │  Semantic Skill Matcher  │  sentence-transformers all-MiniLM-L6-v2
      │  + SKILL_ALIASES dict    │  30+ explicit alias mappings
+     │  + Regex Skill Scanner   │  60+ pattern-based fallback rules
      │  + Skill Decay Model     │  max(0.5, 1 - years_since/5)
      └────────────┬────────────┘
                   │
@@ -75,9 +79,10 @@ Resume (PDF / DOCX / Image) + Job Description
                     │
                     ▼
      ┌──────────────────────────────────────┐
-     │         Streamlit UI                 │
-     │  Gap Analysis · Roadmap · 3D DAG     │
-     │  Interview Prep · Research · Export  │
+     │         Streamlit UI (5 tabs)        │
+     │  Gap Analysis · Roadmap              │
+     │  Interview Prep · Research           │
+     │  ATS & Export                        │
      └──────────────────────────────────────┘
 ```
 
@@ -109,15 +114,16 @@ The path generator is **deterministic Python**, not an LLM choosing order:
 | Layer | Technology |
 |---|---|
 | **UI Framework** | Streamlit ≥1.35.0 |
-| **Charts** | Plotly ≥5.20 (Radar, Bar, Timeline, animated) |
-| **3D Visualization** | Custom Three.js force-directed DAG (Canvas 2D renderer) |
+| **Charts** | Plotly ≥5.20 (Radar, Bar, Timeline, Salary — animated radar with eased fill) |
 | **LLM — Text** | Groq API — LLaMA 3.3-70b-versatile |
 | **LLM — Vision** | Groq API — Llama 4 Scout 17B (image resume OCR) |
 | **Skill Matching** | `sentence-transformers` all-MiniLM-L6-v2 + cosine similarity |
+| **Regex Fallback** | 60+ compiled patterns covering SQL, Docker, K8s, NLP, CI/CD, and more |
 | **Dependency Graph** | `networkx` — DiGraph, topological sort, ancestor traversal |
-| **PDF Parsing** | `pdfplumber` |
+| **PDF Parsing** | `pdfplumber` (text) + PyMuPDF optional (scanned PDF rasterisation) |
 | **DOCX Parsing** | `python-docx` |
 | **PDF Export** | `reportlab` |
+| **Calendar Export** | ICS/iCal — one session/day, 7 PM start, weekdays only |
 | **Web Search** | `ddgs` (DuckDuckGo Search) |
 | **Env Management** | `python-dotenv` |
 
@@ -133,7 +139,7 @@ All datasets are publicly available and used for testing and skill taxonomy refe
 | Occupational Skills Taxonomy | [O*NET OnLine Database](https://www.onetcenter.org/db_releases.html) | Skill taxonomy reference |
 | Job Descriptions Dataset | [Kaggle — kshitizregmi/jobs-and-job-description](https://www.kaggle.com/datasets/kshitizregmi/jobs-and-job-description) | JD parsing testing |
 | LLM — Text | [LLaMA 3.3-70b-versatile](https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct) via [Groq](https://groq.com) | Skill extraction, ATS audit, reasoning |
-| LLM — Vision | [Llama 4 Scout 17B](https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct) via Groq | Image resume OCR |
+| LLM — Vision | [Llama 4 Scout 17B](https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct) via Groq | Image resume OCR + scanned PDF fallback |
 | Embeddings | [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) | Semantic skill matching |
 
 ---
@@ -142,8 +148,10 @@ All datasets are publicly available and used for testing and skill taxonomy refe
 
 ### Core Pipeline
 - **Groq LLM Parsing** — Structured JSON extraction from raw resume and JD text in a single call
-- **Vision OCR** — Image resumes (JPG/PNG) analyzed via Llama 4 Scout vision model
+- **Vision OCR** — Image resumes (JPG/PNG) and scanned PDFs analyzed via Llama 4 Scout vision model
+- **Scanned PDF Fallback** — PyMuPDF rasterises up to 3 pages, stitched vertically, then sent to vision OCR
 - **Semantic Skill Matching** — Three-layer: alias dict → substring → cosine similarity (≥0.52 threshold)
+- **Regex Skill Scanner** — 60+ compiled patterns applied after every LLM extraction as a safety net
 - **Skill Gap Analysis** — Proficiency score (0–10) per skill: Known / Partial / Missing
 - **Skill Decay Model** — Skills unused 2+ years: `max(0.5, 1 - years_since/5)`
 - **Adaptive Path Generator** — NetworkX topological sort + prerequisite chaining
@@ -153,19 +161,31 @@ All datasets are publicly available and used for testing and skill taxonomy refe
 ### Advanced Features
 - **Node-weighted Critical Path** — DP algorithm weights required JD skills at 10x vs prerequisites
 - **Interview Readiness Score** — Required known + (partial×0.4) / total, seniority-adjusted
-- **ATS Resume Rewrite** — Anti-hallucination prompt: never adds experience not in original resume
-- **Before/After ATS Score** — Quantified improvement from rewrite
-- **3D DAG Visualization** — Three.js force-directed graph of course dependency network
-- **Animated Radar Chart** — Eased fill-in animation showing skill gap visually
-- **Interview Prep Tab** — AI-generated questions per skill, targeted to proficiency level
+- **ATS Resume Rewrite** — Anti-hallucination prompt: never adds experience not in original resume; no gap admissions
+- **Before/After ATS Score** — Quantified improvement shown as a side-by-side comparison
+- **Visual Weight Hierarchy** — Gap cards sized by urgency: missing+required (large, glowing), known (subdued)
+- **Top 3 Priorities Block** — Always-visible action strip showing the most critical missing skills
+- **Business Case Panel** — Train vs hire cost comparison with live salary benchmark
+- **Animated Radar Chart** — Eased cubic fill-in animation showing skill gap visually
+- **Interview Prep Tab** — AI-generated questions per skill, calibrated to candidate seniority level
 - **Peer Percentile** — Candidate ranking based on in-demand skill coverage
 - **Transfer Advantages** — Shows how existing skills accelerate learning new ones
-- **Progress Persistence** — Completed modules persist via localStorage
-- **Weekly Study Plan** — Configurable pace (1–8h/day), week-by-week breakdown
+- **Progress Persistence** — Completed modules persist via localStorage per candidate+role
+- **Weekly Study Plan** — Configurable pace (1/2/4/8h/day), Week 1 expanded by default
 - **ROI Ranking** — Modules ranked by demand × required × inverse hours
-- **Live Salary Fetch** — DuckDuckGo search → Groq extraction → chart
+- **Live Salary Fetch** — DuckDuckGo search → Groq extraction → bar chart + outcome insight on ATS tab
 - **Course Finder** — Real links from Coursera, Udemy, YouTube, edX
+- **Calendar Export** — .ics file, one session/day at 7 PM, weekdays only, no midnight slots
 - **PDF / JSON / CSV Export** — Full roadmap with personalized reasoning
+
+### UI Improvements (v14)
+- DAG View tab removed (replaced by inline ROI chart and timeline)
+- Shareable link block removed
+- Banner redesigned: single 5-metric strip replacing two separate rows
+- Landing page: sample scenario buttons as primary CTA with one-click instant demo
+- Topbar simplified: Vision OCR chip, Groq chip only
+- Research tab: salary + market insights surfaced above the search box
+- ATS tab: salary outcome insight box added at top
 
 ---
 
@@ -187,14 +207,14 @@ Each course: `id`, `title`, `skill`, `domain`, `level`, `duration_hrs`, `prereqs
 SkillForge/
 ├── main.py              ← Streamlit UI — all tabs, rendering, state management
 ├── backend.py           ← Core logic: AI pipeline, DAG, analysis, charts
-├── components/
-│   └── dag_3d.html      ← Three.js 3D dependency graph component
 ├── .env                 ← GROQ_API_KEY=gsk_... (never committed)
 ├── .gitignore
 ├── requirements.txt
 ├── Dockerfile
 └── README.md
 ```
+
+> **Note:** The `components/dag_3d.html` Three.js component has been removed in v14.
 
 ---
 
@@ -216,6 +236,9 @@ pip install -r requirements.txt
 
 # Optional: better semantic matching
 pip install sentence-transformers scikit-learn
+
+# Optional: scanned PDF support (vision OCR fallback)
+pip install PyMuPDF Pillow
 
 # 3. Set your Groq API key
 echo "GROQ_API_KEY=gsk_your_key_here" > .env
@@ -252,21 +275,27 @@ numpy>=1.26.0
 ddgs>=9.0.0
 ```
 
+Optional (for scanned PDF support):
+```
+PyMuPDF>=1.23.0
+Pillow>=10.0.0
+```
+
 ---
 
 ## Evaluation Criteria Coverage
 
 | Criterion | Weight | How Covered |
 |---|---|---|
-| **Technical Sophistication** | 20% | Semantic matching · NetworkX DAG · skill decay · node-weighted DP critical path · vision OCR |
+| **Technical Sophistication** | 20% | Semantic matching · NetworkX DAG · skill decay · node-weighted DP critical path · vision OCR · scanned PDF rasterisation · 60+ regex fallback rules |
 | **Communication & Docs** | 20% | This README · 5-slide deck · demo video · inline code comments |
-| **User Experience** | 15% | Dark UI · 3D DAG view · animated radar · interview prep tab · loading states · error handling |
-| **Grounding & Reliability** | 15% | Catalog-only enforcement · anti-hallucination rewrite prompt · zero fabrication guarantee |
-| **Reasoning Trace** | 10% | Dedicated Groq call per module · personalized 2-sentence reasoning · visible in UI + exports |
-| **Product Impact** | 10% | Hours saved · role fit delta · interview readiness % · peer percentile · before/after ATS |
+| **User Experience** | 15% | Dark UI · animated radar · interview prep tab · one-click demo scenarios · visual urgency hierarchy · loading states · error handling |
+| **Grounding & Reliability** | 15% | Catalog-only enforcement · anti-hallucination rewrite prompt · no gap admissions in rewrite · zero fabrication guarantee |
+| **Reasoning Trace** | 10% | Dedicated Groq call per module · personalized 2-sentence reasoning · is_critical flag consistency · visible in UI + exports |
+| **Product Impact** | 10% | Hours saved · role fit delta · interview readiness % · peer percentile · before/after ATS · business case train vs hire · salary outcome insight |
 | **Cross-Domain Scalability** | 10% | Tech + Non-Tech + Soft Skills · 3 demo scenarios · seniority gap injection |
 
 ---
 
-*Built with Groq · NetworkX · Streamlit · sentence-transformers · Three.js · DuckDuckGo*
-*ARTPARK CodeForge Hackathon 2025*
+*Built with Groq · NetworkX · Streamlit · sentence-transformers · DuckDuckGo*
+*ARTPARK CodeForge Hackathon 2025 — v14*
