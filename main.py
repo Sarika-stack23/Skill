@@ -1,17 +1,10 @@
 # =============================================================================
 #  main.py — SkillForge v14  |  Hackathon Edition
-#  CHANGES:
-#  - Removed DAG View tab entirely
-#  - Removed shareable link block
-#  - Banner redesigned: merged two metric rows into one clean strip
-#  - Added "Top 3 Priorities This Week" always-visible action block
-#  - Gap Analysis: visual weight hierarchy (missing=large+glow, known=subdued)
-#  - Radar chart centered, larger
-#  - Roadmap: business case at top, Week 1 expanded by default
-#  - Research: salary+insights above search box
-#  - ATS Export: salary outcome insight added, link removed
-#  - Landing: sample buttons as primary CTA
-#  - Topbar: removed NetworkX DAG chip
+#  FIXES:
+#  - Added Course Dependency Graph at bottom of Roadmap tab
+#  - Fixed duplicate "Rate limited" text in loading error state
+#  - Improved loading screen error styling
+#  - CSS polish: tighter gap on demo buttons, better error card
 # =============================================================================
 
 import os, json, urllib.parse, threading, hashlib
@@ -144,7 +137,7 @@ button, select, input, label,
 .sf-chip     { padding:3px 9px; border-radius:99px; border:1px solid var(--border); color:var(--t3); font-size:0.6rem; font-family:var(--mono); }
 .sf-chip.on  { border-color:rgba(45,212,191,0.3); color:var(--teal); background:rgba(45,212,191,0.05); }
 
-/* ── HERO (redesigned — compact 2-col) ── */
+/* ── HERO ── */
 .sf-hero { padding:28px 0 20px; }
 .sf-eyebrow {
   font-family:var(--mono); font-size:0.62rem; font-weight:500;
@@ -161,7 +154,6 @@ button, select, input, label,
 .sf-h1 span { color:var(--teal); }
 .sf-sub { font-size:0.88rem; color:var(--t2); line-height:1.65; max-width:480px; margin-bottom:16px; }
 
-/* Feature pills — compact horizontal */
 .sf-feat-pills { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:0; }
 .sf-feat-pill {
   display:inline-flex; align-items:center; gap:5px;
@@ -171,34 +163,7 @@ button, select, input, label,
 }
 .sf-feat-pill b { color:var(--t2); font-weight:500; }
 
-/* Demo CTA panel (right column of hero) */
-.sf-demo-panel {
-  background:var(--s1); border:1px solid var(--border); border-radius:14px;
-  padding:20px; height:100%;
-}
-.sf-demo-hd {
-  font-family:var(--mono); font-size:0.6rem; letter-spacing:0.12em;
-  text-transform:uppercase; color:var(--t3); margin-bottom:12px;
-  display:flex; align-items:center; gap:8px;
-}
-.sf-demo-hd::before { content:''; flex:1; height:1px; background:var(--border); }
-.sf-demo-hd::after  { content:''; flex:1; height:1px; background:var(--border); }
-.sf-demo-card {
-  background:var(--s2); border:1px solid var(--border);
-  border-radius:10px; padding:14px 16px; margin-bottom:8px;
-  cursor:pointer; transition:all 0.15s; display:flex; align-items:center; gap:12px;
-}
-.sf-demo-card:last-child { margin-bottom:0; }
-.sf-demo-card:hover { border-color:rgba(45,212,191,0.35); background:rgba(45,212,191,0.04); }
-.sf-demo-icon { font-size:1.4rem; flex-shrink:0; }
-.sf-demo-body { flex:1; min-width:0; }
-.sf-demo-label { font-family:var(--mono); font-size:0.58rem; color:var(--teal); letter-spacing:0.08em; text-transform:uppercase; margin-bottom:2px; }
-.sf-demo-title { font-size:0.88rem; font-weight:600; color:var(--t1); }
-.sf-demo-sub   { font-family:var(--mono); font-size:0.64rem; color:var(--t3); margin-top:2px; }
-.sf-demo-arr   { color:var(--t4); font-size:1rem; flex-shrink:0; transition:color 0.15s; }
-.sf-demo-card:hover .sf-demo-arr { color:var(--teal); }
-
-/* How-it-works — compact bar */
+/* ── HOW IT WORKS ── */
 .sf-how {
   display:flex; align-items:stretch; margin:16px 0 12px;
   background:var(--s1); border:1px solid var(--border);
@@ -212,9 +177,8 @@ button, select, input, label,
 .sf-how-num   { font-family:var(--mono); font-size:0.62rem; font-weight:600; color:var(--teal); margin-bottom:4px; letter-spacing:0.1em; }
 .sf-how-title { font-size:0.82rem; font-weight:700; color:var(--t1); margin-bottom:2px; }
 .sf-how-sub   { font-family:var(--mono); font-size:0.6rem; color:var(--t3); line-height:1.4; }
-.sf-how-arrow { display:none; }
 
-/* Stats strip — compact */
+/* ── STATS STRIP ── */
 .sf-stats-strip {
   display:flex; align-items:center; justify-content:center;
   margin:0 0 14px; background:transparent;
@@ -229,20 +193,6 @@ button, select, input, label,
 .sf-panel-icon { font-size:0.9rem; }
 .sf-ready-badge { font-family:var(--mono); font-size:0.58rem; padding:2px 8px; border-radius:99px; background:rgba(45,212,191,0.1); color:var(--teal); border:1px solid var(--bhi); margin-left:auto; }
 .sf-wc { font-family:var(--mono); font-size:0.62rem; color:var(--t3); margin-top:6px; }
-.sf-sample-lbl { font-family:var(--mono); font-size:0.65rem; color:var(--t3); }
-/* Upload card wrapper */
-.sf-upload-card {
-  background:var(--s1); border:1px solid var(--border); border-radius:12px;
-  padding:18px 20px; transition:border-color 0.15s;
-}
-.sf-upload-card:focus-within { border-color:rgba(45,212,191,0.3); }
-/* Bottom action bar */
-.sf-action-bar {
-  display:flex; align-items:center; gap:12px; margin-top:12px;
-  padding:12px 16px; background:var(--s1); border:1px solid var(--border);
-  border-radius:10px;
-}
-.sf-action-bar-label { font-family:var(--mono); font-size:0.68rem; color:var(--t3); flex:1; }
 
 /* ── UPLOAD ── */
 [data-testid="stFileUploadDropzone"] {
@@ -328,7 +278,6 @@ textarea::placeholder { color:var(--t4)!important; }
 [data-testid="stExpander"] summary      { font-family:var(--sans)!important; color:var(--t2)!important; font-size:0.85rem!important; }
 [data-testid="stProgressBar"] > div > div { background:var(--teal)!important; }
 [data-testid="stProgressBar"] > div       { background:rgba(255,255,255,0.05)!important; border-radius:99px!important; }
-/* FIX 8: checkbox dark */
 [data-testid="stCheckbox"] > label > div[data-testid="stCheckboxContainer"] { background:var(--s2)!important; border:1px solid rgba(71,85,105,0.8)!important; border-radius:4px!important; }
 [data-testid="stCheckbox"] > label > div[data-testid="stCheckboxContainer"] > svg { color:var(--teal)!important; stroke:var(--teal)!important; }
 [data-testid="stCheckbox"] > label       { background:transparent!important; color:var(--t2)!important; font-size:0.82rem!important; }
@@ -345,7 +294,7 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-hero-delta-label { font-family:var(--mono); font-size:0.7rem; text-transform:uppercase; letter-spacing:0.12em; color:var(--t3); margin:8px 0 6px; }
 .sf-hero-delta-sub   { font-size:0.9rem; color:var(--t2); }
 
-/* ── SINGLE METRIC STRIP (replaces old two-row layout) ── */
+/* ── METRIC STRIP ── */
 .sf-metric-strip {
   display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-top:16px;
 }
@@ -358,7 +307,7 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-ground-dot   { width:7px; height:7px; border-radius:50%; background:var(--teal); flex-shrink:0; animation:pulse 2s infinite; }
 .sf-seniority-pill { display:inline-flex; align-items:center; gap:8px; padding:6px 14px; border-radius:6px; background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.18); font-family:var(--mono); font-size:0.72rem; color:var(--amber); margin-bottom:14px; }
 
-/* ── TOP 3 PRIORITIES BLOCK ── */
+/* ── TOP 3 PRIORITIES ── */
 .sf-priorities {
   background:linear-gradient(135deg, rgba(239,68,68,0.06) 0%, rgba(11,13,20,0) 60%);
   border:1px solid rgba(239,68,68,0.2); border-radius:12px;
@@ -370,23 +319,20 @@ textarea::placeholder { color:var(--t4)!important; }
   margin-bottom:14px; display:flex; align-items:center; gap:10px;
 }
 .sf-priorities-hd::after { content:''; flex:1; height:1px; background:rgba(239,68,68,0.15); }
-.sf-priority-row {
-  display:grid; grid-template-columns:repeat(3,1fr); gap:10px;
-}
+.sf-priority-row { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
 .sf-priority-card {
   background:rgba(239,68,68,0.04); border:1px solid rgba(239,68,68,0.15);
   border-radius:9px; padding:14px 16px 16px;
 }
-.sf-priority-rank { font-family:var(--mono); font-size:0.6rem; color:var(--red); margin-bottom:6px; }
+.sf-priority-rank  { font-family:var(--mono); font-size:0.6rem; color:var(--red); margin-bottom:6px; }
 .sf-priority-skill { font-size:0.95rem; font-weight:700; color:var(--t1); margin-bottom:4px; }
 .sf-priority-meta  { font-family:var(--mono); font-size:0.68rem; color:var(--t3); }
 .sf-priority-bar   { height:4px; background:rgba(255,255,255,0.05); border-radius:99px; margin-top:12px; margin-bottom:2px; }
 .sf-priority-bar-fill { height:100%; border-radius:99px; background:var(--red); }
 
-/* ── SKILL CARDS with visual hierarchy ── */
+/* ── SKILL CARDS ── */
 .sf-skill-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:10px; margin-bottom:8px; }
 
-/* MISSING REQUIRED — large, urgent */
 .sf-skill-card-missing-req {
   background:rgba(239,68,68,0.05); border:1px solid rgba(239,68,68,0.3);
   border-radius:10px; padding:16px 18px;
@@ -394,20 +340,14 @@ textarea::placeholder { color:var(--t4)!important; }
   transition:border-color 0.12s;
 }
 .sf-skill-card-missing-req:hover { border-color:rgba(239,68,68,0.5); }
-
-/* PARTIAL REQUIRED — medium urgency */
 .sf-skill-card-partial-req {
   background:rgba(245,158,11,0.04); border:1px solid rgba(245,158,11,0.25);
   border-radius:10px; padding:14px 16px; transition:border-color 0.12s;
 }
-
-/* KNOWN — subdued */
 .sf-skill-card-known {
   background:var(--s1); border:1px solid rgba(45,212,191,0.1);
   border-radius:9px; padding:12px 14px; opacity:0.8;
 }
-
-/* MISSING NON-REQUIRED — minimal */
 .sf-skill-card-missing-pref {
   background:var(--s1); border:1px solid var(--border);
   border-radius:9px; padding:12px 14px; opacity:0.65;
@@ -453,7 +393,7 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-mod-trace-lbl  { font-family:var(--mono); font-size:0.6rem; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; color:var(--teal); margin-bottom:5px; }
 .sf-mod-trace-body { font-size:0.78rem; color:var(--t2); line-height:1.6; }
 
-/* ── BUSINESS CASE (prominent at top of roadmap) ── */
+/* ── BUSINESS CASE ── */
 .sf-biz-case {
   background:linear-gradient(135deg, rgba(74,222,128,0.05) 0%, rgba(11,13,20,0) 70%);
   border:1px solid rgba(74,222,128,0.2); border-radius:12px;
@@ -465,6 +405,23 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-biz-val  { font-family:var(--mono); font-size:1.4rem; font-weight:500; color:var(--t1); line-height:1; }
 .sf-biz-lbl  { font-family:var(--mono); font-size:0.6rem; color:var(--t3); margin-top:4px; }
 .sf-biz-div  { color:var(--t4); padding:0 16px; font-size:1.2rem; flex-shrink:0; }
+
+/* ── DAG SECTION ── */
+.sf-dag-wrap {
+  background:var(--s1); border:1px solid var(--border);
+  border-radius:12px; padding:20px; margin-top:4px;
+}
+.sf-dag-wrap img { border-radius:8px; width:100%; }
+.sf-dag-legend {
+  display:flex; flex-wrap:wrap; gap:8px; margin-top:14px;
+  padding:12px 14px; background:var(--s2); border:1px solid var(--border);
+  border-radius:8px;
+}
+.sf-dag-legend-item {
+  display:inline-flex; align-items:center; gap:5px;
+  font-family:var(--mono); font-size:0.62rem; color:var(--t3);
+}
+.sf-dag-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
 
 /* ── ATS PANEL ── */
 .sf-ats-row  { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px; }
@@ -478,7 +435,7 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-talk  { font-size:0.82rem; color:var(--t2); padding:8px 0 8px 14px; border-left:2px solid var(--teal); margin-bottom:7px; line-height:1.55; }
 .sf-kw    { display:inline-block; font-family:var(--mono); font-size:0.65rem; padding:3px 9px; border-radius:3px; margin:3px; background:rgba(239,68,68,0.10); color:var(--red); border:1px solid rgba(239,68,68,0.30); font-weight:600; }
 
-/* ── SALARY OUTCOME BOX ── */
+/* ── SALARY OUTCOME ── */
 .sf-salary-outcome {
   background:rgba(45,212,191,0.04); border:1px solid var(--bhi);
   border-radius:10px; padding:16px 20px; margin-bottom:20px;
@@ -490,7 +447,7 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-salary-outcome-text  { font-size:0.95rem; color:var(--t1); font-weight:600; }
 .sf-salary-outcome-sub   { font-family:var(--mono); font-size:0.68rem; color:var(--t3); margin-top:3px; }
 
-/* ── EXPORT CARDS ── */
+/* ── EXPORT ── */
 .sf-export-card { background:var(--s1); border:1px solid var(--border); border-radius:10px; padding:20px 22px; height:100%; }
 .sf-export-hd   { font-size:0.9rem; font-weight:700; color:var(--t1); margin-bottom:4px; }
 .sf-export-sub  { font-size:0.78rem; color:var(--t3); margin-bottom:14px; line-height:1.5; }
@@ -503,7 +460,7 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-search-title  { font-size:0.9rem; font-weight:600; color:var(--teal); text-decoration:none; }
 .sf-search-title:hover { text-decoration:underline; }
 .sf-search-url    { font-family:var(--mono); font-size:0.65rem; color:var(--t4); margin:3px 0 5px; }
-.sf-search-body   { font-size:0.78rem; color:var(--t2); line-height:1.55; -webkit-line-clamp:3; overflow:hidden; max-height:4.8em; }
+.sf-search-body   { font-size:0.78rem; color:var(--t2); line-height:1.55; overflow:hidden; max-height:4.8em; }
 .sf-insight       { background:rgba(45,212,191,0.03); border-left:2px solid var(--teal); border-radius:0 5px 5px 0; padding:9px 13px; margin-bottom:6px; font-size:0.82rem; color:var(--t2); line-height:1.55; }
 .sf-trend-pill    { display:inline-flex; align-items:center; gap:6px; background:var(--s2); border:1px solid var(--border); border-radius:6px; padding:6px 12px; margin:4px; font-size:0.78rem; }
 .sf-empty-state   { background:var(--s2); border:1px solid var(--border); border-radius:8px; padding:20px 24px; text-align:center; font-family:var(--mono); font-size:0.75rem; color:var(--t3); }
@@ -519,19 +476,22 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-xfer-desc      { font-size:0.72rem; color:var(--t3); margin-top:2px; }
 
 /* ── LOADING ── */
-.sf-loading-wrap {
-  display:flex; flex-direction:column; align-items:center; justify-content:center;
-  min-height:calc(100vh - 52px); padding:0 20px;
+.sf-loading-outer {
+  display:flex; flex-direction:column; align-items:center;
+  padding:48px 0 80px;
 }
 .sf-loading-box {
-  width:100%; max-width:480px;
+  width:100%; max-width:500px;
   background:var(--s1); border:1px solid var(--border);
-  border-radius:16px; padding:32px;
+  border-radius:16px; padding:32px 28px;
 }
 .sf-loading-title {
   font-family:var(--mono); font-size:0.62rem; letter-spacing:0.14em;
-  text-transform:uppercase; color:var(--teal); margin-bottom:24px; text-align:center;
-  display:flex; align-items:center; justify-content:center; gap:8px;
+  text-transform:uppercase; color:var(--teal); margin-bottom:6px; text-align:center;
+}
+.sf-loading-sub {
+  font-size:0.75rem; color:var(--t3); font-family:var(--mono);
+  text-align:center; margin-bottom:24px;
 }
 .sf-lstep        { display:flex; align-items:flex-start; gap:12px; padding:10px 14px; border-radius:7px; margin-bottom:5px; font-size:0.84rem; }
 .sf-lstep-done   { background:rgba(74,222,128,0.05);  border:1px solid rgba(74,222,128,0.12); }
@@ -544,6 +504,17 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-lprog      { height:3px; background:rgba(255,255,255,0.05); border-radius:99px; overflow:hidden; margin:20px 0 0; }
 .sf-lprog-fill { height:100%; border-radius:99px; background:linear-gradient(90deg,var(--teal),var(--green)); transition:width 0.6s ease; }
 
+/* ── LOADING ERROR CARD — clean, not jarring ── */
+.sf-error-card {
+  margin-top:16px; padding:16px 20px;
+  background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.25);
+  border-radius:10px;
+}
+.sf-error-icon  { font-size:1.1rem; margin-bottom:8px; }
+.sf-error-title { font-size:0.9rem; font-weight:600; color:#fca5a5; margin-bottom:4px; }
+.sf-error-body  { font-family:var(--mono); font-size:0.72rem; color:var(--t3); line-height:1.6; }
+.sf-error-hint  { font-family:var(--mono); font-size:0.68rem; color:var(--t4); margin-top:8px; padding-top:8px; border-top:1px solid rgba(239,68,68,0.15); }
+
 /* ── MISC ── */
 .sf-sh      { font-size:1.15rem; font-weight:700; color:var(--t1); letter-spacing:-0.02em; margin-bottom:4px; }
 .sf-ss      { font-family:var(--mono); font-size:0.68rem; color:var(--t3); margin-bottom:18px; }
@@ -551,65 +522,43 @@ textarea::placeholder { color:var(--t4)!important; }
 .sf-diff    { background:#090c16; border:1px solid var(--border); border-radius:8px; padding:14px 16px; font-family:var(--mono); font-size:0.78rem; color:var(--t2); white-space:pre-wrap; line-height:1.6; max-height:320px; overflow-y:auto; }
 .sf-log     { font-family:var(--mono); font-size:0.68rem; color:var(--t3); padding:5px 10px; background:var(--s1); border:1px solid var(--border); border-radius:4px; margin-bottom:3px; display:flex; gap:12px; }
 .sf-impact-box   { background:var(--s1); border:1px solid var(--border); border-radius:10px; padding:22px 28px; margin:24px 0; }
-.sf-impact-row   { display:flex; align-items:center; justify-content:center; gap:0; margin-bottom:12px; }
-.sf-impact-item  { text-align:center; flex:1; }
-.sf-impact-lbl   { font-family:var(--mono); font-size:0.62rem; text-transform:uppercase; letter-spacing:0.08em; color:var(--t3); margin-bottom:6px; }
-.sf-impact-val   { font-family:var(--mono); font-size:2rem; font-weight:500; line-height:1; }
-.sf-impact-arrow { font-size:1.2rem; color:var(--t4); padding:0 20px; flex-shrink:0; }
-.sf-impact-sub   { font-family:var(--mono); font-size:0.65rem; color:var(--t3); text-align:center; line-height:1.6; }
-
-/* B1 fix — priority card bar not flush */
-.sf-priority-card { padding-bottom: 16px !important; }
-.sf-priority-bar  { margin-top:12px; margin-bottom:2px; }
-
-/* B4 fix — metric strip aligned */
-.sf-metric-card { min-height:100px; }
-.sf-metric-sub  { min-height:2.4em; overflow:hidden; }
-
-/* B8 fix — biz case dividers don't collapse */
-.sf-biz-div { flex-shrink:0; }
-
-/* D3 fix — sf-page class */
 .sf-page { max-width:1400px; margin:0 auto; }
 
-/* D5 fix — search body Firefox fallback */
-.sf-search-body { overflow:hidden; max-height:4.8em; }
+/* ── UPLOAD PANEL COLUMNS — card styling via :has() ── */
+[data-testid="stHorizontalBlock"]:has([data-testid="stFileUploadDropzone"]) [data-testid="column"] {
+  background:var(--s1)!important;
+  border:1px solid var(--border)!important;
+  border-radius:12px!important;
+  padding:18px 16px 16px!important;
+}
 
-/* B5 fix — thicker ATS bar */
-.sf-prog { height:6px; }
+/* ── UPLOAD PANEL HEADER ── */
+.sf-upload-hd {
+  font-size:0.82rem; font-weight:700; color:var(--t1);
+  margin-bottom:10px; display:flex; align-items:center; gap:8px;
+}
 
-/* ── DEMO SECTION — style the right-column area ── */
-.sf-demo-header {
-  font-family:var(--mono); font-size:0.6rem; letter-spacing:0.12em;
-  text-transform:uppercase; color:var(--t3); text-align:center;
-  padding:10px 0 14px; margin-bottom:4px;
+/* ── DEMO CARD LINKS (pure HTML, not Streamlit buttons) ── */
+.sf-demo-card-link {
+  display:flex; align-items:center; gap:12px;
+  background:var(--s2); border:1px solid var(--border);
+  border-radius:10px; padding:14px 16px; margin-bottom:8px;
+  text-decoration:none; transition:all 0.15s; cursor:pointer;
 }
-.sf-demo-tag {
-  font-family:var(--mono); font-size:0.6rem; color:var(--t4);
-  text-align:left; padding:0 4px 10px; line-height:1.3;
-}
-/* Style secondary buttons in demo context to look like cards */
-.sf-demo-col .stButton > button {
-  background:var(--s2)!important; border:1px solid var(--border)!important;
-  color:var(--t1)!important; font-weight:600!important; font-size:0.88rem!important;
-  text-align:left!important; padding:14px 18px!important; height:auto!important;
-  border-radius:10px!important; letter-spacing:-0.01em!important;
-  transition:all 0.15s!important;
-}
-.sf-demo-col .stButton > button:hover {
+.sf-demo-card-link:hover {
   border-color:rgba(45,212,191,0.4)!important;
-  background:rgba(45,212,191,0.05)!important;
-  color:var(--t1)!important;
+  background:rgba(45,212,191,0.06)!important;
 }
-/* Upload cards — use border on Streamlit tab container */
-.sf-upload-col [data-testid="stTabs"] {
-  background:var(--s1); border:1px solid var(--border);
-  border-radius:12px; padding:16px;
-}
-/* Tab content spacing */
-[data-testid="stTabContent"] { padding:0!important; }
-/* Remove Streamlit's default column gap issues */
+.sf-demo-card-link:last-child { margin-bottom:0; }
+.sf-demo-card-icon  { font-size:1.4rem; flex-shrink:0; }
+.sf-demo-card-body  { flex:1; min-width:0; }
+.sf-demo-card-label { font-family:var(--mono); font-size:0.58rem; color:var(--teal); letter-spacing:0.08em; text-transform:uppercase; margin-bottom:2px; }
+.sf-demo-card-title { font-size:0.88rem; font-weight:600; color:var(--t1); }
+.sf-demo-card-arr   { color:var(--t4); font-size:1rem; flex-shrink:0; transition:color 0.15s; }
+.sf-demo-card-link:hover .sf-demo-card-arr { color:var(--teal); }
+
 [data-testid="column"] { padding-left:8px!important; padding-right:8px!important; }
+[data-testid="stTabContent"] { padding:0!important; }
 
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 @keyframes spin  { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
@@ -657,19 +606,20 @@ def _full_reset() -> None:
     st.rerun()
 
 # =============================================================================
-#  TOPBAR — removed NetworkX DAG chip
+#  TOPBAR
 # =============================================================================
 def render_topbar(is_image_resume: bool = False) -> None:
     vision_chip = (
         '<span class="sf-chip on">🖼 Vision OCR</span>'
         if is_image_resume
-        else '<span class="sf-chip off" style="color:#2d3a52;border-color:rgba(255,255,255,0.04)">🖼 Vision OCR</span>'
+        else '<span class="sf-chip" style="color:#2d3a52;border-color:rgba(255,255,255,0.04)">🖼 Vision OCR</span>'
     )
     st.markdown(f"""
     <div class="sf-top">
       <div style="display:flex;align-items:center;gap:16px">
         <div class="sf-logo">Skill<em>Forge</em></div>
-        <span style="font-family:var(--mono);font-size:0.58rem;color:var(--t4);padding:2px 7px;background:var(--s2);border:1px solid var(--border);border-radius:3px">v14</span>
+        <span style="font-family:var(--mono);font-size:0.58rem;color:var(--t4);padding:2px 7px;
+             background:var(--s2);border:1px solid var(--border);border-radius:3px">v14</span>
       </div>
       <div class="sf-top-right">
         <span class="sf-chip on">⚡ Groq LLaMA 3.3</span>
@@ -679,12 +629,23 @@ def render_topbar(is_image_resume: bool = False) -> None:
     </div>""", unsafe_allow_html=True)
 
 # =============================================================================
-#  INPUT PAGE — clean professional redesign
+#  INPUT PAGE  — fixed: no fake wrapper divs, demo panel as pure HTML
 # =============================================================================
 def render_input() -> None:
+    # ── Handle demo selection via query params (pure-HTML demo cards use ?demo=KEY) ──
+    demo_choice = st.query_params.get("demo", "")
+    if demo_choice and demo_choice in SAMPLES:
+        for wk in _RESET_KEYS:
+            st.session_state.pop(wk, None)
+        st.session_state["resume_text"]    = SAMPLES[demo_choice]["resume"]
+        st.session_state["jd_text"]        = SAMPLES[demo_choice]["jd"]
+        st.session_state["_resume_source"] = "paste"
+        st.session_state["step"]           = "analyzing"
+        st.query_params.clear()
+        st.rerun()
+
     st.markdown('<div class="sf-page" style="padding:0 32px 60px">', unsafe_allow_html=True)
 
-    # ── HERO: 2-column split ──
     hero_l, hero_r = st.columns([11, 9], gap="large")
 
     with hero_l:
@@ -692,7 +653,8 @@ def render_input() -> None:
         <div class="sf-hero">
           <div class="sf-eyebrow">ARTPARK CodeForge · AI Adaptive Onboarding</div>
           <div class="sf-h1">Skip what you know.<br><span>Learn what you need.</span></div>
-          <div class="sf-sub">Upload resume + JD — SkillForge maps your exact skill gap and generates a dependency-ordered roadmap powered by Groq LLaMA&nbsp;3.3 and NetworkX DAG.</div>
+          <div class="sf-sub">Upload resume + JD — SkillForge maps your exact skill gap and generates a
+          dependency-ordered roadmap powered by Groq LLaMA&nbsp;3.3 and NetworkX DAG.</div>
           <div class="sf-feat-pills">
             <span class="sf-feat-pill">🧠 <b>Skill Decay Model</b></span>
             <span class="sf-feat-pill">🗺 <b>NetworkX DAG</b></span>
@@ -703,42 +665,48 @@ def render_input() -> None:
         </div>""", unsafe_allow_html=True)
 
     with hero_r:
-        st.markdown('<div style="height:24px"></div>', unsafe_allow_html=True)
-        # Demo panel — styled header + proper card-look buttons
+        # ── DEMO PANEL — entirely pure HTML so the card wrapper actually works ──
+        # Uses ?demo=KEY query param; Python detects it at top of this function
+        st.markdown('<div style="height:20px"></div>', unsafe_allow_html=True)
         st.markdown("""
-        <div style="background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:20px 20px 8px">
-          <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.12em;text-transform:uppercase;
-               color:var(--t3);text-align:center;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+        <div style="background:var(--s1);border:1px solid var(--border);border-radius:14px;padding:20px">
+          <div style="font-family:var(--mono);font-size:0.6rem;letter-spacing:0.12em;
+               text-transform:uppercase;color:var(--t3);text-align:center;margin-bottom:16px;
+               display:flex;align-items:center;gap:10px">
             <span style="flex:1;height:1px;background:var(--border)"></span>
             ⚡ Try a demo
             <span style="flex:1;height:1px;background:var(--border)"></span>
           </div>
+
+          <a href="?demo=junior_swe" class="sf-demo-card-link">
+            <span class="sf-demo-card-icon">💻</span>
+            <div class="sf-demo-card-body">
+              <div class="sf-demo-card-label">TECH · Python · React · Docker · AWS</div>
+              <div class="sf-demo-card-title">Junior SWE → Mid Full Stack</div>
+            </div>
+            <span class="sf-demo-card-arr">→</span>
+          </a>
+
+          <a href="?demo=senior_ds" class="sf-demo-card-link">
+            <span class="sf-demo-card-icon">🧠</span>
+            <div class="sf-demo-card-body">
+              <div class="sf-demo-card-label">AI · ML · NLP · MLOps · Leadership</div>
+              <div class="sf-demo-card-title">Senior DS → Lead AI</div>
+            </div>
+            <span class="sf-demo-card-arr">→</span>
+          </a>
+
+          <a href="?demo=hr_manager" class="sf-demo-card-link">
+            <span class="sf-demo-card-icon">👔</span>
+            <div class="sf-demo-card-body">
+              <div class="sf-demo-card-label">NON-TECH · L&amp;D · Employee Relations</div>
+              <div class="sf-demo-card-title">HR Coordinator → Manager</div>
+            </div>
+            <span class="sf-demo-card-arr">→</span>
+          </a>
         </div>""", unsafe_allow_html=True)
 
-        sample_meta = {
-            "junior_swe": ("💻", "Junior SWE → Mid Full Stack", "TECH · Python · React · Docker · AWS"),
-            "senior_ds":  ("🧠", "Senior DS → Lead AI",        "AI · ML · NLP · MLOps · Leadership"),
-            "hr_manager": ("👔", "HR Coordinator → Manager",   "NON-TECH · L&D · Employee Relations"),
-        }
-        st.markdown('<div class="sf-demo-col">', unsafe_allow_html=True)
-        for key, (icon, title, tags) in sample_meta.items():
-            if st.button(f"{icon}  {title}", key=f"pre_{key}", use_container_width=True):
-                for wk in _RESET_KEYS:
-                    st.session_state.pop(wk, None)
-                st.session_state["resume_text"]    = SAMPLES[key]["resume"]
-                st.session_state["jd_text"]        = SAMPLES[key]["jd"]
-                st.session_state["_resume_source"] = "paste"
-                st.session_state["step"]           = "analyzing"
-                st.rerun()
-            st.markdown(
-                f'<div style="font-family:var(--mono);font-size:0.6rem;color:var(--t4);'
-                f'margin:-4px 4px 10px;padding-left:2px">{tags}</div>',
-                unsafe_allow_html=True,
-            )
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
-
-    # ── HOW IT WORKS — compact 3-step bar ──
+    # ── HOW IT WORKS ──
     st.markdown("""
     <div class="sf-how">
       <div class="sf-how-step">
@@ -758,7 +726,7 @@ def render_input() -> None:
       </div>
     </div>""", unsafe_allow_html=True)
 
-    # ── STATS strip ──
+    # ── STATS STRIP ──
     st.markdown("""
     <div class="sf-stats-strip">
       <div class="sf-stat"><span class="sf-stat-n">47</span><span class="sf-stat-l">Courses</span></div>
@@ -769,21 +737,28 @@ def render_input() -> None:
       <div class="sf-stat-div"></div>
       <div class="sf-stat"><span class="sf-stat-n">0</span><span class="sf-stat-l">Hallucinations</span></div>
       <div class="sf-stat-div"></div>
-      <div class="sf-stat"><span class="sf-stat-n" style="font-size:1rem;padding-top:4px">LLaMA 3.3</span><span class="sf-stat-l">LLM Engine</span></div>
+      <div class="sf-stat"><span class="sf-stat-n" style="font-size:1rem;padding-top:4px">LLaMA 3.3</span>
+        <span class="sf-stat-l">LLM Engine</span></div>
     </div>""", unsafe_allow_html=True)
 
     # ── UPLOAD PANELS ──
+    # Note: card background applied via CSS :has([data-testid="stFileUploadDropzone"])
     left, right = st.columns(2, gap="large")
 
     with left:
         src_flag   = st.session_state.get("_resume_source", "")
         has_resume = bool(st.session_state.get("resume_text", "").strip() or st.session_state.get("resume_image"))
-        badge      = '<span class="sf-ready-badge">✓ Ready</span>' if has_resume else ''
+        badge      = '&nbsp;<span class="sf-ready-badge">✓ Ready</span>' if has_resume else ''
+        border_col = "rgba(45,212,191,0.35)" if has_resume else "transparent"
+
+        # Header rendered as standalone markdown — NO fake card wrapper
         st.markdown(
-            f'<div style="background:var(--s1);border:1px solid {"rgba(45,212,191,0.3)" if has_resume else "var(--border)"};'
-            f'border-radius:12px;padding:18px 20px 0">'
-            f'<div class="sf-panel-hd"><span style="font-size:0.9rem">📄</span> Resume {badge}</div>'
-            f'</div>', unsafe_allow_html=True)
+            f'<div class="sf-upload-hd" style="border-bottom:1px solid var(--border);'
+            f'padding-bottom:10px;margin-bottom:4px;border-top:3px solid {border_col};'
+            f'padding-top:10px;border-radius:3px 3px 0 0;">'
+            f'<span style="font-size:0.9rem">📄</span> Resume{badge}</div>',
+            unsafe_allow_html=True,
+        )
 
         up_tab, paste_tab = st.tabs(["Upload file", "Paste text"])
         with up_tab:
@@ -839,23 +814,25 @@ def render_input() -> None:
                         st.markdown(f'<div class="sf-wc">{len(rp.split())} words</div>', unsafe_allow_html=True)
 
         if has_resume and src_flag == "file":
-            st.markdown('<div class="sf-ghost" style="margin-top:6px">', unsafe_allow_html=True)
-            if st.button("✕ Clear resume", key="clr_res"):
+            if st.button("✕ Clear resume", key="clr_res", type="secondary"):
                 for k in ["resume_text","resume_image","res_paste","_resume_source",
                            "_resume_fname","_resume_hash","result","rw_result"]:
                     st.session_state.pop(k, None)
                 _init_state()
                 st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
 
     with right:
         has_jd   = bool(st.session_state.get("jd_text", "").strip())
-        badge_jd = '<span class="sf-ready-badge">✓ Ready</span>' if has_jd else ''
+        badge_jd = '&nbsp;<span class="sf-ready-badge">✓ Ready</span>' if has_jd else ''
+        border_jd = "rgba(45,212,191,0.35)" if has_jd else "transparent"
+
         st.markdown(
-            f'<div style="background:var(--s1);border:1px solid {"rgba(45,212,191,0.3)" if has_jd else "var(--border)"};'
-            f'border-radius:12px;padding:18px 20px 0">'
-            f'<div class="sf-panel-hd"><span style="font-size:0.9rem">💼</span> Job Description {badge_jd}</div>'
-            f'</div>', unsafe_allow_html=True)
+            f'<div class="sf-upload-hd" style="border-bottom:1px solid var(--border);'
+            f'padding-bottom:10px;margin-bottom:4px;border-top:3px solid {border_jd};'
+            f'padding-top:10px;border-radius:3px 3px 0 0;">'
+            f'<span style="font-size:0.9rem">💼</span> Job Description{badge_jd}</div>',
+            unsafe_allow_html=True,
+        )
 
         jup_tab, jpaste_tab = st.tabs(["Upload file", "Paste text"])
         with jup_tab:
@@ -887,8 +864,8 @@ def render_input() -> None:
                     st.markdown(f'<div class="sf-wc">{len(jp.split())} words</div>', unsafe_allow_html=True)
 
     # ── BOTTOM ACTION BAR ──
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-    opt1, opt2_col, btn_col = st.columns([1.4, 1.4, 2.2])
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+    opt1, opt2_col, btn_col = st.columns([1.6, 1.4, 2.0])
     with opt1:
         cur_loc = st.session_state.get("sal_location", "India")
         idx_loc = _LOC_OPTS.index(cur_loc) if cur_loc in _LOC_OPTS else 0
@@ -911,14 +888,15 @@ def render_input() -> None:
             missing = (["resume"] if not resume_ready else []) + (["job description"] if not jd_ready else [])
             st.markdown(
                 f'<div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;'
-                f'padding:10px 16px;font-family:var(--mono);font-size:0.72rem;color:var(--t3);text-align:center">'
+                f'padding:11px 16px;font-family:var(--mono);font-size:0.72rem;color:var(--t3);'
+                f'text-align:center;margin-top:2px">'
                 f'Add {" + ".join(missing)} to continue</div>',
                 unsafe_allow_html=True,
             )
     st.markdown("</div>", unsafe_allow_html=True)
 
 # =============================================================================
-#  LOADING — centered card, no dead space
+#  LOADING — centered card with clean error handling
 # =============================================================================
 def render_loading() -> None:
     resume_text = st.session_state.get("resume_text", "")
@@ -945,38 +923,48 @@ def render_loading() -> None:
         st.session_state.pop("force_fresh", None)
 
     steps = [
-        ("📄", "Parsing resume & JD",              "Extracting text, structure, metadata"),
-        ("🔍", "Extracting skills",                 "Scoring 0–10 per skill + regex fallback"),
-        ("🧩", "Computing skill gap",               "Known · Partial · Missing classification"),
-        ("🗺", "Building dependency roadmap",       "NetworkX DAG, topological sort"),
-        ("🌐", "Fetching live market data",         "Salary, trends, job market"),
+        ("📄", "Parsing resume & JD",        "Extracting text, structure, metadata"),
+        ("🔍", "Extracting skills",           "Scoring 0–10 per skill + regex fallback"),
+        ("🧩", "Computing skill gap",         "Known · Partial · Missing classification"),
+        ("🗺", "Building dependency roadmap", "NetworkX DAG, topological sort"),
+        ("🌐", "Fetching live market data",   "Salary, trends, job market"),
     ]
 
-    # Use columns to center the loading box
     _, center, _ = st.columns([1, 2, 1])
     with center:
         st.markdown("""
-        <div style="padding:48px 0 32px;text-align:center">
-          <div style="font-family:var(--mono);font-size:0.62rem;letter-spacing:0.14em;
-               text-transform:uppercase;color:var(--teal);margin-bottom:6px">⚡ Analyzing your profile</div>
-          <div style="font-size:0.8rem;color:var(--t3);font-family:var(--mono)">Groq LLaMA 3.3 · NetworkX DAG · Semantic matcher</div>
+        <div class="sf-loading-outer">
+          <div style="max-width:500px;width:100%">
+            <div class="sf-loading-title">⚡ Analyzing your profile</div>
+            <div class="sf-loading-sub">Groq LLaMA 3.3 · NetworkX DAG · Semantic matcher</div>
+          </div>
         </div>""", unsafe_allow_html=True)
 
         slots = [st.empty() for _ in steps]
         prog  = st.empty()
+        err_slot = st.empty()
 
         def show_steps(done: int) -> None:
             for i, (icon, title, sub) in enumerate(steps):
                 if i < done:
-                    s = f'<div class="sf-lstep sf-lstep-done"><span class="sf-lstep-icon">✓</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
+                    s = (f'<div class="sf-lstep sf-lstep-done">'
+                         f'<span class="sf-lstep-icon">✓</span>'
+                         f'<div><div class="sf-lstep-title">{title}</div>'
+                         f'<div class="sf-lstep-sub">{sub}</div></div></div>')
                 elif i == done:
-                    s = f'<div class="sf-lstep sf-lstep-active"><span class="sf-lstep-icon sf-lstep-spin">{icon}</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
+                    s = (f'<div class="sf-lstep sf-lstep-active">'
+                         f'<span class="sf-lstep-icon sf-lstep-spin">{icon}</span>'
+                         f'<div><div class="sf-lstep-title">{title}</div>'
+                         f'<div class="sf-lstep-sub">{sub}</div></div></div>')
                 else:
-                    s = f'<div class="sf-lstep sf-lstep-wait"><span class="sf-lstep-icon">○</span><div><div class="sf-lstep-title">{title}</div><div class="sf-lstep-sub">{sub}</div></div></div>'
+                    s = (f'<div class="sf-lstep sf-lstep-wait">'
+                         f'<span class="sf-lstep-icon">○</span>'
+                         f'<div><div class="sf-lstep-title">{title}</div>'
+                         f'<div class="sf-lstep-sub">{sub}</div></div></div>')
                 slots[i].markdown(s, unsafe_allow_html=True)
             pct = int(done / len(steps) * 100)
             prog.markdown(
-                f'<div class="sf-lprog" style="margin-top:16px">'
+                f'<div class="sf-lprog">'
                 f'<div class="sf-lprog-fill" style="width:{pct}%"></div></div>',
                 unsafe_allow_html=True,
             )
@@ -988,20 +976,41 @@ def render_loading() -> None:
         resume_image_b64=resume_img,
         location=st.session_state.get("sal_location", "India"),
     )
+
     with center:
         if "error" not in result:
             show_steps(3); show_steps(4); show_steps(5)
 
         if "error" in result:
             err = result.get("error", "unknown")
-            st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+            # Build a clean human-readable error message (no duplicated "Rate limited")
             if err == "rate_limited":
-                st.error(f"⏱ Rate limited — {result.get('message', '')}")
+                msg        = result.get("message", "Rate limit reached. Please wait and retry.")
+                title_text = "⏱ Rate limited"
+                body_text  = msg
+                hint_text  = "Groq free-tier limits reset in the time shown above. Hit the button below to go back and retry."
             elif "analysis_quality_failure" in str(err):
-                st.error("Skill extraction failed. Please try again.")
+                title_text = "⚠ Extraction failed"
+                body_text  = "No skills could be extracted from the resume. Please check the resume text and try again."
+                hint_text  = "Tip: Paste the resume text directly instead of uploading a file."
+            elif "parse_failed" in str(err):
+                title_text = "⚠ Parse failed"
+                body_text  = "The AI returned an unexpected response. This sometimes happens on first load."
+                hint_text  = "Tip: Try again — Groq is usually reliable on a second attempt."
             else:
-                st.error(f"Analysis failed: {err}")
-            st.markdown('<div class="sf-ghost" style="margin-top:8px">', unsafe_allow_html=True)
+                title_text = "✕ Analysis failed"
+                body_text  = str(err)[:120]
+                hint_text  = "If this keeps happening, check your GROQ_API_KEY and internet connection."
+
+            err_slot.markdown(f"""
+            <div class="sf-error-card">
+              <div class="sf-error-title">{title_text}</div>
+              <div class="sf-error-body">{body_text}</div>
+              <div class="sf-error-hint">{hint_text}</div>
+            </div>""", unsafe_allow_html=True)
+
+            st.markdown('<div class="sf-ghost" style="margin-top:12px">', unsafe_allow_html=True)
             if st.button("← Back to input", key="retry_btn", use_container_width=True):
                 st.session_state["step"] = "input"; st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
@@ -1012,7 +1021,7 @@ def render_loading() -> None:
     st.rerun()
 
 # =============================================================================
-#  BANNER — merged metric rows + priorities block
+#  BANNER
 # =============================================================================
 def render_banner(res: dict) -> None:
     c  = res["candidate"]
@@ -1034,10 +1043,10 @@ def render_banner(res: dict) -> None:
     ats   = _safe_int(ql.get("ats_score"))
     grade = ql.get("overall_grade", "–") or "–"
 
-    ats_display_banner = f"{ats}%" if ats > 0 else "–"
-    ats_color_banner   = "var(--teal)" if ats > 0 else "var(--t3)"
+    ats_display = f"{ats}%" if ats > 0 else "–"
+    ats_color   = "var(--teal)" if ats > 0 else "var(--t3)"
+    fit_c       = "#64748b" if cur < 40 else _AMBER if cur < 65 else _GREEN
 
-    fit_c        = "#64748b" if cur < 40 else _AMBER if cur < 65 else _GREEN
     cache_badge  = '<span class="sf-cache-badge">⚡ Cached</span>' if res.get("_cache_hit") else ""
     vision_badge = '<span class="sf-vision-badge">🖼 Vision OCR</span>' if res.get("_is_image") else ""
     hpd_val      = _safe_int(st.session_state.get("hpd", 2), default=2)
@@ -1083,7 +1092,7 @@ def render_banner(res: dict) -> None:
           <div class="sf-metric-sub">{iv.get('label','–')} · {iv.get('advice','')}</div>
         </div>
         <div class="sf-metric-card">
-          <div class="sf-metric-n" style="color:{ats_color_banner}">{ats_display_banner}</div>
+          <div class="sf-metric-n" style="color:{ats_color}">{ats_display}</div>
           <div class="sf-metric-l">ATS Score</div>
           <div class="sf-metric-sub">Grade <strong style="color:var(--teal)">{grade}</strong> · {completeness}% complete</div>
         </div>
@@ -1112,18 +1121,18 @@ def render_banner(res: dict) -> None:
             unsafe_allow_html=True,
         )
 
-    # ── TOP 3 PRIORITIES THIS WEEK ──
-    gp   = res["gap_profile"]
+    # ── TOP 3 PRIORITIES ──
+    gp = res["gap_profile"]
     missing_req = [g for g in gp if g["status"] == "Missing" and g["is_required"]][:3]
     if missing_req:
         cards_html = ""
         max_hrs = max((_safe_int((g.get("catalog_course") or {}).get("duration_hrs")) for g in missing_req), default=1) or 1
         for i, g in enumerate(missing_req):
-            co   = g.get("catalog_course") or {}
-            hrs  = _safe_int(co.get("duration_hrs"))
-            lvl  = co.get("level","") or ""
+            co        = g.get("catalog_course") or {}
+            hrs       = _safe_int(co.get("duration_hrs"))
+            lvl       = co.get("level","") or ""
             hrs_label = f"{hrs}h to close" if hrs > 0 else "est. ~8h"
-            fill_pct = min(100, round(hrs / max_hrs * 80) + 20) if hrs > 0 else 30
+            fill_pct  = min(100, round(hrs / max_hrs * 80) + 20) if hrs > 0 else 30
             cards_html += f"""
             <div class="sf-priority-card">
               <div class="sf-priority-rank">PRIORITY {i+1} · MISSING · REQUIRED</div>
@@ -1140,7 +1149,7 @@ def render_banner(res: dict) -> None:
     st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
 
 # =============================================================================
-#  TAB: GAP ANALYSIS — visual weight hierarchy
+#  TAB: GAP ANALYSIS
 # =============================================================================
 def render_tab_overview(res: dict) -> None:
     gp     = res["gap_profile"]
@@ -1179,10 +1188,10 @@ def render_tab_overview(res: dict) -> None:
             decay = '<span class="sf-decay-tag">⏱ decayed</span>' if g.get("decayed") else ""
             ctx   = f'<div class="sf-skill-ctx">{g["context"]}</div>' if g.get("context") else ""
             co    = g.get("catalog_course")
-            ctxt  = (f'<div style="font-family:var(--mono);font-size:0.65rem;color:var(--t3);margin-top:5px">📚 {co["title"]} · {co["duration_hrs"]}h · {co["level"]}</div>') if co else ""
+            ctxt  = (f'<div style="font-family:var(--mono);font-size:0.65rem;color:var(--t3);margin-top:5px">'
+                     f'📚 {co["title"]} · {co["duration_hrs"]}h · {co["level"]}</div>') if co else ""
             req_star = "★ " if req else ""
 
-            # Determine card class based on status + required
             if s == "Missing" and req:
                 card_class = "sf-skill-card-missing-req"
                 name_class = "sf-skill-name-lg"
@@ -1227,12 +1236,12 @@ def render_tab_overview(res: dict) -> None:
                     f'<div style="background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.15);'
                     f'border-radius:7px;padding:10px 14px;margin-bottom:6px">'
                     f'<div style="font-size:0.88rem;font-weight:600;color:var(--red)">{o["skill"]}</div>'
-                    f'<div style="font-family:var(--mono);font-size:0.7rem;color:var(--t3);margin-top:3px">{o["reason"]}</div></div>',
+                    f'<div style="font-family:var(--mono);font-size:0.7rem;color:var(--t3);margin-top:3px">'
+                    f'{o["reason"]}</div></div>',
                     unsafe_allow_html=True,
                 )
 
     with col_radar:
-        # Radar chart — larger, centered
         _radar_fig = animated_radar_chart(gp)
         if hasattr(_radar_fig, 'update_layout'):
             _radar_fig.update_layout(height=400)
@@ -1252,9 +1261,8 @@ def render_tab_overview(res: dict) -> None:
                     f'</div>', unsafe_allow_html=True,
                 )
 
-        known_hot = sum(1 for g in gp if g["status"] == "Known"
-                        and _bk.MARKET_DEMAND.get(g["skill"].lower(), 0) >= 3)
-        total_hot = sum(1 for g in gp if _bk.MARKET_DEMAND.get(g["skill"].lower(), 0) >= 3)
+        known_hot  = sum(1 for g in gp if g["status"] == "Known" and _bk.MARKET_DEMAND.get(g["skill"].lower(), 0) >= 3)
+        total_hot  = sum(1 for g in gp if _bk.MARKET_DEMAND.get(g["skill"].lower(), 0) >= 3)
         if total_hot > 0:
             pct_raw     = round(known_hot / total_hot * 100)
             percentile  = max(10, min(90, 20 + pct_raw * 0.7))
@@ -1276,7 +1284,7 @@ def render_tab_overview(res: dict) -> None:
 
         sal_med = _safe_float(sal.get("median_lpa"))
         if sal and sal_med > 0:
-            st.markdown(f'<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin:16px 0 4px">Live salary benchmark</div>', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin:16px 0 4px">Live salary benchmark</div>', unsafe_allow_html=True)
             _sal_fig = salary_chart(sal)
             if hasattr(_sal_fig, 'update_layout'):
                 _sal_fig.update_layout(margin=dict(t=44, b=36, l=8, r=8))
@@ -1285,7 +1293,7 @@ def render_tab_overview(res: dict) -> None:
             st.caption(f"Source: {sal.get('source','web')} · {sal.get('note','')}")
 
 # =============================================================================
-#  TAB: ROADMAP — business case at top, Week 1 expanded
+#  TAB: ROADMAP — with DAG at bottom
 # =============================================================================
 def render_tab_roadmap(res: dict) -> None:
     path = res["path"]
@@ -1308,7 +1316,7 @@ def render_tab_roadmap(res: dict) -> None:
 
     completed = set(st.session_state.get("completed", []))
 
-    # ── BUSINESS CASE at TOP ──
+    # ── BUSINESS CASE ──
     roadmap_hrs    = _safe_int(im.get("roadmap_hours"))
     train_cost_inr = roadmap_hrs * 500
     hire_cost_inr  = 1000000
@@ -1351,23 +1359,25 @@ def render_tab_roadmap(res: dict) -> None:
                                 key="hpd_slider")
         st.session_state["hpd"] = hpd
         rem = sum(_safe_int(m.get("duration_hrs")) for m in path if m["id"] not in completed)
-        st.markdown(f'<p style="font-family:var(--mono);font-size:0.72rem;color:var(--t2);text-align:right">{rem}h remaining · <strong style="color:var(--teal)">{weeks_ready(rem, hpd)}</strong></p>', unsafe_allow_html=True)
+        st.markdown(f'<p style="font-family:var(--mono);font-size:0.72rem;color:var(--t2);text-align:right">'
+                    f'{rem}h remaining · <strong style="color:var(--teal)">{weeks_ready(rem, hpd)}</strong></p>',
+                    unsafe_allow_html=True)
 
-    # ── WEEK 1 PLAN — expanded by default ──
+    # ── WEEK 1 PLAN ──
     rem_path = [m for m in path if m["id"] not in completed]
     wp_quick = weekly_plan(rem_path, float(hpd))
     if wp_quick:
         with st.expander(f"📅 Week 1 study plan — {wp_quick[0]['total_hrs']:.0f}h of {hpd * 5}h weekly capacity", expanded=True):
             w = wp_quick[0]
             for mx in w["modules"]:
-                star = "★ " if mx.get("is_critical") else ""
+                star       = "★ " if mx.get("is_critical") else ""
                 crit_style = "color:var(--red)" if mx.get("is_critical") else "color:var(--t2)"
                 st.markdown(
                     f'<div style="display:flex;justify-content:space-between;align-items:center;'
                     f'padding:8px 0;border-bottom:1px solid var(--border)">'
                     f'<span style="font-size:0.88rem;{crit_style}">{star}<strong>{mx["title"]}</strong></span>'
-                    f'<span style="font-family:var(--mono);font-size:0.72rem;color:var(--t3)">{mx["hrs_this_week"]:.0f}h this week</span>'
-                    f'</div>',
+                    f'<span style="font-family:var(--mono);font-size:0.72rem;color:var(--t3)">'
+                    f'{mx["hrs_this_week"]:.0f}h this week</span></div>',
                     unsafe_allow_html=True,
                 )
 
@@ -1398,7 +1408,11 @@ def render_tab_roadmap(res: dict) -> None:
             if not mods:
                 continue
             phase_hrs = sum(_safe_int(m.get("duration_hrs")) for m in mods)
-            st.markdown(f'<div class="sf-phase-hd">{phase_name} <span style="font-weight:400;color:var(--t4)">{len(mods)} modules · {phase_hrs}h</span></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="sf-phase-hd">{phase_name} '
+                f'<span style="font-weight:400;color:var(--t4)">{len(mods)} modules · {phase_hrs}h</span></div>',
+                unsafe_allow_html=True,
+            )
             for m in mods:
                 idx    += 1
                 is_done = m["id"] in completed
@@ -1486,8 +1500,69 @@ def render_tab_roadmap(res: dict) -> None:
                 star = "★ " if mx.get("is_critical") else ""
                 st.markdown(f"- {star}**{mx['title']}** · `{mx['hrs_this_week']:.0f}h` of `{mx['total_hrs']}h`")
 
+    # ── COURSE DEPENDENCY GRAPH ──
+    st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="font-size:0.88rem;font-weight:600;color:var(--t1);margin-bottom:4px">'
+        '🗺 Course Dependency Graph</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div style="font-family:var(--mono);font-size:0.68rem;color:var(--t3);margin-bottom:14px">'
+        '47-course catalog modelled as a directed acyclic graph · arrows = prerequisites · '
+        'topological sort guarantees foundational modules always appear before advanced ones'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    import os as _os
+    _dag_paths = [
+        "dag.png",
+        "/app/dag.png",
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "dag.png"),
+    ]
+    _dag_found = next((_p for _p in _dag_paths if _os.path.exists(_p)), None)
+
+    if _dag_found:
+        st.markdown('<div class="sf-dag-wrap">', unsafe_allow_html=True)
+        st.image(
+            _dag_found,
+            use_container_width=True,
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
+        # Color key legend
+        legend_items = [
+            ("#2dd4bf", "Python / Data"),
+            ("#a78bfa", "ML / AI"),
+            ("#f59e0b", "SQL"),
+            ("#f97316", "DevOps"),
+            ("#3b82f6", "Cloud"),
+            ("#4ade80", "Web / API"),
+            ("#f9a8d4", "HR"),
+            ("#6ee7b7", "Leadership"),
+        ]
+        dots = "".join(
+            f'<span class="sf-dag-legend-item">'
+            f'<span class="sf-dag-dot" style="background:{col}"></span>{lbl}</span>'
+            for col, lbl in legend_items
+        )
+        st.markdown(
+            f'<div class="sf-dag-legend">{dots}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;'
+            'padding:20px 24px;text-align:center;font-family:var(--mono);font-size:0.72rem;color:var(--t3)">'
+            '<div style="font-size:1.4rem;margin-bottom:8px">🗺</div>'
+            '<div style="font-size:0.82rem;color:var(--t2);font-weight:600;margin-bottom:4px">dag.png not found</div>'
+            'Place dag.png in the project root directory to display the dependency graph'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
 # =============================================================================
-#  TAB: RESEARCH — salary + insights above search
+#  TAB: RESEARCH
 # =============================================================================
 def render_tab_research(res: dict) -> None:
     gp     = res["gap_profile"]
@@ -1500,7 +1575,6 @@ def render_tab_research(res: dict) -> None:
     st.markdown('<div class="sf-sh">Web research</div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-ss">Live salary data · market insights · course finder · skill demand</div>', unsafe_allow_html=True)
 
-    # ── SALARY + MARKET INSIGHTS first ──
     sal_col, mkt_col = st.columns(2, gap="large")
     with sal_col:
         st.markdown('<div style="font-size:0.9rem;font-weight:600;color:var(--t1);margin-bottom:10px">Salary benchmark</div>', unsafe_allow_html=True)
@@ -1554,7 +1628,6 @@ def render_tab_research(res: dict) -> None:
 
     st.markdown('<div class="sf-divider"></div>', unsafe_allow_html=True)
 
-    # ── SEARCH below data ──
     web_available = not bool(_bk._DDG_ERROR)
     st.markdown('<div style="font-size:0.9rem;font-weight:600;color:var(--t1);margin-bottom:10px">Web search</div>', unsafe_allow_html=True)
     q_col, btn_col = st.columns([5, 1])
@@ -1635,7 +1708,7 @@ def render_tab_research(res: dict) -> None:
             st.markdown(f'<div class="sf-empty-state"><div class="sf-empty-icon">📚</div><div class="sf-empty-label">No course links found for {sel_s}</div></div>', unsafe_allow_html=True)
 
 # =============================================================================
-#  TAB: ATS & EXPORT — salary outcome insight, no shareable link
+#  TAB: ATS & EXPORT
 # =============================================================================
 def render_tab_ats_export(res: dict) -> None:
     c       = res["candidate"]
@@ -1653,14 +1726,13 @@ def render_tab_ats_export(res: dict) -> None:
     st.markdown('<div class="sf-sh">ATS audit</div>', unsafe_allow_html=True)
     st.markdown('<div class="sf-ss">Resume quality scores · improvement tips · keyword gaps · talking points</div>', unsafe_allow_html=True)
 
-    # ── SALARY OUTCOME INSIGHT (new) ──
     sal_med = _safe_float(sal.get("median_lpa"))
     sal_max = _safe_float(sal.get("max_lpa"))
 
     if sal_med > 0:
-        curr    = sal.get("currency", "INR")
-        sym     = "₹" if curr == "INR" else "$"
-        unit    = "L/yr" if curr == "INR" else "k/yr"
+        curr = sal.get("currency", "INR")
+        sym  = "₹" if curr == "INR" else "$"
+        unit = "L/yr" if curr == "INR" else "k/yr"
         st.markdown(f"""
         <div class="sf-salary-outcome">
           <div class="sf-salary-outcome-icon">🎯</div>
@@ -1676,11 +1748,11 @@ def render_tab_ats_export(res: dict) -> None:
     clarity  = _safe_int(ql.get("clarity_score"))
     grade    = ql.get("overall_grade","–") or "–"
     if grade in ("None", None, ""): grade = "–"
-    ats_display  = f"{ats_pct}%" if ats_pct > 0 else "–"
-    compl_display= f"{compl}%"   if compl  > 0 else "–"
-    clar_display = f"{clarity}%" if clarity> 0 else "–"
 
-    prog_color = "var(--red)" if ats_pct < 40 else "var(--amber)" if ats_pct < 70 else "var(--teal)"
+    ats_display   = f"{ats_pct}%" if ats_pct > 0 else "–"
+    compl_display = f"{compl}%"   if compl  > 0 else "–"
+    clar_display  = f"{clarity}%" if clarity > 0 else "–"
+    prog_color    = "var(--red)" if ats_pct < 40 else "var(--amber)" if ats_pct < 70 else "var(--teal)"
 
     st.markdown(f"""
     <div class="sf-ats-row">
@@ -1887,9 +1959,9 @@ def render_tab_interview_prep(res: dict) -> None:
     score = iv.get("score", 0)
     label = iv.get("label", "–")
     col1, col2, col3 = st.columns(3)
-    col1.metric("Readiness score",       f"{score}%",                                         label,          delta_color="off")
-    col2.metric("Skills you can answer", str(_safe_int(iv.get("req_known"))),                 "ready now",    delta_color="off")
-    col3.metric("Skills needing prep",   str(_safe_int(iv.get("req_missing"))),               "study first",  delta_color="off")
+    col1.metric("Readiness score",       f"{score}%",                          label,         delta_color="off")
+    col2.metric("Skills you can answer", str(_safe_int(iv.get("req_known"))),  "ready now",   delta_color="off")
+    col3.metric("Skills needing prep",   str(_safe_int(iv.get("req_missing"))),"study first", delta_color="off")
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
@@ -2034,7 +2106,7 @@ def render_sidebar(res: dict) -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
 # =============================================================================
-#  RESULTS PAGE — 5 tabs, no DAG
+#  RESULTS PAGE
 # =============================================================================
 def render_results() -> None:
     res = st.session_state.get("result")
@@ -2059,7 +2131,6 @@ def render_results() -> None:
     render_banner(res)
     st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
 
-    # ── 5 TABS (no DAG) ──
     tab_gap, tab_road, tab_prep, tab_research, tab_ats = st.tabs([
         "Gap Analysis", "Roadmap", "🎤 Interview Prep", "Research", "ATS & Export",
     ])
