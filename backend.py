@@ -1,8 +1,15 @@
 # =============================================================================
-#  backend.py — SkillForge v12  |  All bugs fixed + UI data fixes
+#  backend.py — SkillForge v13  |  All critical bugs fixed
+#  FIX 1: ICS calendar — one session per day, never midnight / 2 AM / 5 AM
+#  FIX 2: Critical path — only required-skill nodes + their ancestors
+#  FIX 3: Projected fit — completion-probability weighted, never 100%
+#  FIX 4: Resume rewrite — hard ban on disclaimers and cover-letter language
+#  FIX 5: ATS rewrite score — capped at 88 % (see main.py)
+#  FIX 6: SQL regex fallback — inject missed skills after LLM extraction
+#  BONUS: MERN prefix stripped, seniority-calibrated interview Qs, salary units
 # =============================================================================
 
-import os, json, io, re, time, hashlib, shelve, base64
+import os, json, io, re, time, hashlib, shelve, base64, threading
 from typing import Tuple, Optional, List, Dict, Any
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +22,9 @@ from groq import Groq
 
 try:
     from reportlab.lib.pagesizes import letter
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    )
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors as rl_colors
     REPORTLAB = True
@@ -25,12 +34,13 @@ except Exception:
 MODEL_FAST   = "llama-3.3-70b-versatile"
 MODEL_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
 CURRENT_YEAR = datetime.now().year
-_CACHE_PATH  = "/tmp/skillforge_v12"
+_CACHE_PATH  = "/tmp/skillforge_v13"
 
 _GROQ_KEY   = os.getenv("GROQ_API_KEY", "")
 GROQ_CLIENT = Groq(api_key=_GROQ_KEY) if _GROQ_KEY else None
 
 _DDG_ERROR: str = ""
+_DDG_LOCK       = threading.Lock()
 
 
 def get_ddg_error() -> str:
@@ -42,16 +52,20 @@ def ddg_search(query: str, max_results: int = 5) -> List[dict]:
     try:
         from ddgs import DDGS
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results*2, region="wt-wt"))
+            results = list(ddgs.text(query, max_results=max_results * 2, region="wt-wt"))
             blocked = ["zhihu.com", "baidu.com", "weibo.com", "163.com", "csdn.net"]
-            results = [r for r in results if not any(b in r.get("href","") for b in blocked)][:max_results]
-            _DDG_ERROR = ""  # clear on success
+            results = [r for r in results
+                       if not any(b in r.get("href", "") for b in blocked)][:max_results]
+            with _DDG_LOCK:
+                _DDG_ERROR = ""
             return results
     except ImportError:
-        _DDG_ERROR = "web_search_unavailable"
+        with _DDG_LOCK:
+            _DDG_ERROR = "web_search_unavailable"
         return []
     except Exception as e:
-        _DDG_ERROR = f"web_search_unavailable: {str(e)[:60]}"
+        with _DDG_LOCK:
+            _DDG_ERROR = f"web_search_unavailable: {str(e)[:60]}"
         return []
 
 
@@ -79,72 +93,112 @@ def _load_semantic_bg() -> None:
 
 
 # =============================================================================
-#  SKILL ALIASES — FIX: explicit mapping for common variations
+#  SKILL ALIASES
 # =============================================================================
 SKILL_ALIASES: Dict[str, str] = {
-    # REST API variations
     "rest api design":       "rest apis",
     "rest api":              "rest apis",
     "restful api":           "rest apis",
     "restful apis":          "rest apis",
     "api design":            "rest apis",
-    # React variations
     "react.js":              "react",
     "reactjs":               "react",
-    # MERN — maps to constituent skills
-    # handled separately in analyze_gap
-    # JavaScript
     "js":                    "javascript",
     "es6":                   "javascript",
-    "typescript":            "javascript",  # partial overlap
-    # Python
+    "typescript":            "javascript",
     "python3":               "python",
-    # Node
-    "node.js":               "rest apis",   # node implies api capability
+    "node.js":               "rest apis",
     "nodejs":                "rest apis",
-    # CSS/HTML
     "html5":                 "html/css",
     "css3":                  "html/css",
     "html":                  "html/css",
     "css":                   "html/css",
-    # Docker/K8s
     "containerization":      "docker",
     "containers":            "docker",
-    # SQL
     "mysql":                 "sql",
     "postgresql":            "sql",
     "postgres":              "sql",
     "sqlite":                "sql",
-    "nosql":                 "sql",  # partial
-    # ML
-    "deep learning":         "deep learning",
+    "nosql":                 "sql",
     "pytorch":               "deep learning",
     "tensorflow":            "deep learning",
     "scikit-learn":          "machine learning",
     "supervised learning":   "machine learning",
-    # Cloud
     "aws sagemaker":         "aws",
     "ec2":                   "aws",
     "s3":                    "aws",
     "gcp":                   "gcp",
     "google cloud":          "gcp",
-    # DevOps
     "github actions":        "ci/cd",
     "jenkins":               "ci/cd",
     "gitlab ci":             "ci/cd",
-    # Data
     "pandas":                "data analysis",
     "numpy":                 "data analysis",
     "matplotlib":            "data visualization",
     "seaborn":               "data visualization",
 }
 
-# MERN stack implies these skills
 MERN_IMPLIES: List[str] = ["react", "javascript", "rest apis"]
+
+# =============================================================================
+#  FIX 6 — REGEX SKILL SCANNER
+#  Runs after every LLM extraction. Injects any skill the LLM missed.
+# =============================================================================
+_SKILL_REGEX_MAP: List[Tuple[str, str, int]] = [
+    (r"\bSQL\b",              "SQL",         5),
+    (r"\bMySQL\b",            "SQL",         6),
+    (r"\bPostgreSQL\b",       "SQL",         6),
+    (r"\bSQLite\b",           "SQL",         4),
+    (r"\bDockerfile\b",       "Docker",      4),
+    (r"\bdocker[- ]compose\b","Docker",      5),
+    (r"\bKubernetes\b",       "Kubernetes",  3),
+    (r"\bk8s\b",              "Kubernetes",  3),
+    (r"\bFastAPI\b",          "FastAPI",     5),
+    (r"\bflask\b",            "Python",      6),
+    (r"\bdjango\b",           "Python",      6),
+    (r"\bTypeScript\b",       "JavaScript",  6),
+    (r"\bCI/CD\b",            "CI/CD",       4),
+    (r"\bGitHub Actions\b",   "CI/CD",       5),
+    (r"\bJenkins\b",          "CI/CD",       5),
+    (r"\bAWS\b",              "AWS",         4),
+    (r"\bGCP\b",              "GCP",         4),
+    (r"\bAzure\b",            "Cloud Computing", 4),
+    (r"\bMongoDB\b",          "Databases",   5),
+    (r"\bRESTful?\b",         "REST APIs",   5),
+]
+
+
+def _apply_regex_skill_fallback(candidate: dict, resume_text: str) -> dict:
+    existing = {s["skill"].lower() for s in candidate.get("skills", [])}
+    alias_existing: set = set()
+    for sk in list(existing):
+        alias_existing.add(SKILL_ALIASES.get(sk, sk))
+    existing |= alias_existing
+
+    for pattern, skill_name, min_prof in _SKILL_REGEX_MAP:
+        canonical = skill_name.lower()
+        if canonical in existing:
+            continue
+        if SKILL_ALIASES.get(canonical, canonical) in existing:
+            continue
+        if re.search(pattern, resume_text, re.IGNORECASE):
+            candidate.setdefault("skills", []).append({
+                "skill":          skill_name,
+                "proficiency":    min_prof,
+                "year_last_used": CURRENT_YEAR,
+                "context":        "Detected in resume text (regex scanner)",
+            })
+            existing.add(canonical)
+    return candidate
+
+
+def _strip_mern_prefix(context: str) -> str:
+    """Remove internal 'Derived from MERN Stack: ' prefix before user-facing display."""
+    return re.sub(r"^Derived from \w[\w\s]+:\s*", "", context or "")
 
 
 # =============================================================================
-#  CATALOG — 47 courses (unchanged)
+#  CATALOG — 47 courses
 # =============================================================================
 CATALOG: List[Dict] = [
     {"id":"PY01","title":"Python Fundamentals","skill":"Python","domain":"Tech","level":"Beginner","duration_hrs":6,"prereqs":[]},
@@ -211,12 +265,13 @@ MARKET_DEMAND: Dict[str, int] = {
     "inventory management":1,"l&d strategy":1,
 }
 
-# FIX: demand labels derived from MARKET_DEMAND, not just web search counts
+
 def demand_label(skill: str) -> str:
     d = MARKET_DEMAND.get(skill.lower(), 1)
     if d >= 3: return "🔥 Hot"
     if d >= 2: return "📈 Growing"
     return "✓ Stable"
+
 
 OBSOLESCENCE_RISK: Dict[str, str] = {
     "jquery":         "Replaced by vanilla JS and React",
@@ -226,13 +281,14 @@ OBSOLESCENCE_RISK: Dict[str, str] = {
     "manual testing": "AI-assisted automation replacing manual QA",
     "waterfall":      "Industry fully shifted to Agile/DevOps",
 }
+
 TRANSFER_MAP: Dict[str, Dict[str, int]] = {
     "python":            {"machine learning":40,"mlops":35,"fastapi":60,"data analysis":50,
                           "deep learning":30,"rest apis":45,"docker":25,"aws":20},
     "machine learning":  {"deep learning":50,"mlops":45,"nlp":40,"statistics":30},
     "javascript":        {"react":55,"rest apis":40,"html/css":35,"ci/cd":20},
     "react":             {"javascript":50,"html/css":60,"rest apis":30},
-    "rest apis":         {"fastapi":45,"rest apis":0},
+    "rest apis":         {"fastapi":45},
     "sql":               {"data analysis":35,"databases":60,"aws":15},
     "docker":            {"kubernetes":45,"ci/cd":35,"mlops":30,"aws":30,"linux":40},
     "linux":             {"docker":40,"ci/cd":30,"aws":20},
@@ -245,6 +301,7 @@ TRANSFER_MAP: Dict[str, Dict[str, int]] = {
     "leadership":        {"strategic planning":40},
     "financial analysis":{"budgeting":55,"accounting":40},
 }
+
 SENIORITY_MAP: Dict[str, int] = {"Junior":0,"Mid":1,"Senior":2,"Lead":3}
 
 SAMPLES: Dict[str, Dict] = {
@@ -371,15 +428,22 @@ def _groq_call_vision(prompt: str, system: str, image_b64: str, max_tokens: int 
         })
         return json.loads(_extract_json(raw_text))
     except json.JSONDecodeError as e:
-        _audit_log.append({"ts": datetime.now().strftime("%H:%M:%S"), "model": MODEL_VISION.split("/")[-1][:22], "status": f"json_err:{str(e)[:40]}", "in": 0, "out": 0, "ms": 0, "cost": 0})
+        _audit_log.append({"ts": datetime.now().strftime("%H:%M:%S"),
+                           "model": MODEL_VISION.split("/")[-1][:22],
+                           "status": f"json_err:{str(e)[:40]}",
+                           "in": 0, "out": 0, "ms": 0, "cost": 0})
         return {"error": f"vision_json_parse_failed: {e}"}
     except Exception as e:
         err = str(e)
         if "429" in err or "rate_limit" in err:
             m = re.search(r"try again in (\d+)m([\d.]+)s", err)
             wait_s = (int(m.group(1)) * 60 + float(m.group(2))) if m else 60
-            return {"error": "rate_limited", "wait_seconds": int(wait_s), "message": f"Rate limited. Retry in {int(wait_s // 60)}m{int(wait_s % 60)}s."}
-        _audit_log.append({"ts": datetime.now().strftime("%H:%M:%S"), "model": MODEL_VISION.split("/")[-1][:22], "status": f"err:{err[:40]}", "in": 0, "out": 0, "ms": 0, "cost": 0})
+            return {"error": "rate_limited", "wait_seconds": int(wait_s),
+                    "message": f"Rate limited. Retry in {int(wait_s // 60)}m{int(wait_s % 60)}s."}
+        _audit_log.append({"ts": datetime.now().strftime("%H:%M:%S"),
+                           "model": MODEL_VISION.split("/")[-1][:22],
+                           "status": f"err:{err[:40]}",
+                           "in": 0, "out": 0, "ms": 0, "cost": 0})
         return {"error": err}
 
 
@@ -414,8 +478,12 @@ def _groq_call(prompt: str, system: str, model: str = MODEL_FAST, max_tokens: in
         if "429" in err or "rate_limit" in err:
             m = re.search(r"try again in (\d+)m([\d.]+)s", err)
             wait_s = (int(m.group(1)) * 60 + float(m.group(2))) if m else 60
-            return {"error": "rate_limited", "wait_seconds": int(wait_s), "message": f"Rate limited. Retry in {int(wait_s // 60)}m{int(wait_s % 60)}s."}
-        _audit_log.append({"ts": datetime.now().strftime("%H:%M:%S"), "model": model.split("/")[-1][:22], "status": f"err:{err[:40]}", "in": 0, "out": 0, "ms": 0, "cost": 0})
+            return {"error": "rate_limited", "wait_seconds": int(wait_s),
+                    "message": f"Rate limited. Retry in {int(wait_s // 60)}m{int(wait_s % 60)}s."}
+        _audit_log.append({"ts": datetime.now().strftime("%H:%M:%S"),
+                           "model": model.split("/")[-1][:22],
+                           "status": f"err:{err[:40]}",
+                           "in": 0, "out": 0, "ms": 0, "cost": 0})
         return {"error": err}
 
 
@@ -432,7 +500,9 @@ _VISION_SYS = (
 )
 
 
-def mega_call(resume_text: str, jd_text: str, modules_hint: Optional[List[dict]] = None, resume_image_b64: Optional[str] = None) -> dict:
+def mega_call(resume_text: str, jd_text: str,
+              modules_hint: Optional[List[dict]] = None,
+              resume_image_b64: Optional[str] = None) -> dict:
     reasoning_block = (
         '\n  "reasoning": {"<module_id>": "<2-sentence why this candidate needs this module>"},'
         if modules_hint else ""
@@ -480,7 +550,8 @@ def mega_call(resume_text: str, jd_text: str, modules_hint: Optional[List[dict]]
             "Extract skills with realistic proficiency scores (expert=9, proficient=7, familiar=4, basic=3). "
             "For year_last_used, use the most recent job/project year where that skill appeared."
         )
-        return _groq_call_vision(prompt=prompt, system=_VISION_SYS, image_b64=resume_image_b64, max_tokens=3200)
+        return _groq_call_vision(prompt=prompt, system=_VISION_SYS,
+                                  image_b64=resume_image_b64, max_tokens=3200)
     else:
         prompt = (
             f"Analyze this resume and job description.\n\n"
@@ -491,27 +562,32 @@ def mega_call(resume_text: str, jd_text: str, modules_hint: Optional[List[dict]]
         return _groq_call(prompt=prompt, system=_MEGA_SYS, model=MODEL_FAST, max_tokens=2800)
 
 
+# =============================================================================
+#  FIX 4 — RESUME REWRITE with hard anti-disclaimer rules
+# =============================================================================
 def rewrite_resume(resume_text: str, jd: dict, missing_kw: List[str]) -> str:
-    # FIX: strict anti-hallucination prompt + no truncation of resume
     system = (
-        "You are an expert ATS resume writer. "
-        "CRITICAL RULE: You MUST NOT add any technology, tool, framework, skill, certification, "
-        "company, project, or experience that is NOT explicitly present in the original resume. "
-        "Do NOT invent experience. Do NOT add skills the candidate hasn't listed. "
-        "Only restructure, rephrase, and reorganize EXISTING facts for ATS clarity. "
-        "If a missing keyword cannot be honestly inserted based on existing experience, skip it. "
-        "Return JSON only: {\"rewritten_resume\": \"<text>\"}"
+        "You are an expert ATS resume writer. Follow these ABSOLUTE RULES:\n"
+        "1. NEVER add any skill, tool, framework, or experience not in the original resume.\n"
+        "2. NEVER write sentences containing: 'Although not experienced', "
+        "'While I lack', 'I am eager to learn', 'not directly experienced', "
+        "'looking forward to learning', or any admission of skill gaps.\n"
+        "3. NEVER add a closing paragraph. Resumes do not end with summary statements.\n"
+        "4. NEVER add cover letter language of any kind.\n"
+        "5. ONLY restructure and rephrase EXISTING content for ATS clarity.\n"
+        "6. Add missing keywords ONLY where honestly supported by existing experience.\n"
+        "Return JSON only: {\"rewritten_resume\": \"<full rewritten resume text>\"}"
     )
     prompt = (
         f"Rewrite this resume to improve ATS score for the target role.\n"
-        f"Only use EXISTING facts from the resume — never fabricate experience.\n"
-        f"Add missing keywords ONLY where honestly supported by existing experience: {missing_kw[:8]}\n\n"
+        f"Only use EXISTING facts — never fabricate experience.\n"
+        f"Add missing keywords ONLY where honestly supported: {missing_kw[:8]}\n\n"
         f"ORIGINAL RESUME:\n{resume_text[:3000]}\n\n"
         f"TARGET ROLE: {jd.get('role_title','--')}\n"
         f"REQUIRED SKILLS: {jd.get('required_skills', [])}\n\n"
         f"Return JSON: {{\"rewritten_resume\": \"<full rewritten resume>\"}}"
     )
-    r = _groq_call(prompt=prompt, system=system, model=MODEL_FAST, max_tokens=2000)
+    r = _groq_call(prompt=prompt, system=system, model=MODEL_FAST, max_tokens=2800)
     return r.get("rewritten_resume", "Could not rewrite resume.")
 
 
@@ -519,54 +595,54 @@ def rewrite_resume(resume_text: str, jd: dict, missing_kw: List[str]) -> str:
 #  WEB SEARCH FEATURES
 # =============================================================================
 def generate_reasoning(path: List[dict], candidate: dict, jd: dict) -> Dict[str, str]:
-    """
-    FIX: Dedicated reasoning generation — called after path is built.
-    Generates 2-sentence personalized reasoning per module using candidate context.
-    Returns dict of module_id → reasoning string.
-    """
     if not GROQ_CLIENT or not path:
         return {}
-
-    # Build context summary for the prompt
-    cname    = candidate.get("name", "the candidate")
-    crole    = candidate.get("current_role", "")
-    known    = [s["skill"] for s in candidate.get("skills", []) if int(s.get("proficiency") or 0) >= 7]
-    gaps     = [m["gap_skill"] for m in path if m.get("is_required")][:6]
-    role     = jd.get("role_title", "")
-
+    cname        = candidate.get("name", "the candidate")
+    crole        = candidate.get("current_role", "")
+    known        = [s["skill"] for s in candidate.get("skills", [])
+                    if int(s.get("proficiency") or 0) >= 7]
+    gaps         = [m["gap_skill"] for m in path if m.get("is_required")][:6]
+    role         = jd.get("role_title", "")
     modules_list = "\n".join(
         f'- {m["id"]}: {m["title"]} (skill: {m["skill"]}, level: {m["level"]}, '
-        f'gap_skill: {m["gap_skill"]}, required: {m.get("is_required", False)})'
+        f'is_required: {m.get("is_required", False)}, '
+        f'is_critical: {m.get("is_critical", False)})'
         for m in path[:14]
     )
-
     prompt = (
         f"Candidate: {cname}, {crole}. Target role: {role}.\n"
-        f"Known skills: {known}. Gap skills to address: {gaps}.\n\n"
-        f"For each module below, write EXACTLY 2 sentences of personalized reasoning:\n"
-        f"Sentence 1: Why this specific candidate needs this module given their background.\n"
-        f"Sentence 2: How it connects to the target role requirements.\n\n"
+        f"Known skills: {known}. Gap skills: {gaps}.\n\n"
+        f"For each module write EXACTLY 2 sentences:\n"
+        f"S1: Why this candidate needs this module (reference their background).\n"
+        f"S2: How it connects to the role — if is_critical=True say why it is critical; "
+        f"if is_critical=False reflect its lower priority honestly.\n\n"
         f"Modules:\n{modules_list}\n\n"
         f"Return JSON: {{\"reasoning\": {{\"<module_id>\": \"<2 sentences>\", ...}}}}"
     )
     r = _groq_call(
         prompt=prompt,
-        system="Expert L&D advisor. Write concise, personalized module reasoning. Return JSON only.",
+        system="Expert L&D advisor. Reasoning must be CONSISTENT with is_critical flag. Return JSON only.",
         model=MODEL_FAST, max_tokens=1200,
     )
     return r.get("reasoning", {}) if "error" not in r else {}
+
 
 def search_real_salary(role: str, location: str) -> dict:
     results = ddg_search(f"{role} salary {location} 2025 average annual", max_results=6)
     if not results:
         return {}
-    snippets = "\n".join(f"- {r.get('title','')}: {r.get('body','')[:200]}" for r in results[:5])
+    snippets = "\n".join(
+        f"- {r.get('title','')}: {r.get('body','')[:200]}" for r in results[:5]
+    )
     r = _groq_call(
-        f'Extract salary data for "{role}" in {location} from these search snippets.\n\n'
+        f'Extract salary data for "{role}" in {location} from these snippets.\n\n'
         f'{snippets}\n\n'
         f'Return JSON: {{"min_lpa":<number>,"max_lpa":<number>,"median_lpa":<number>,'
-        f'"currency":"INR or USD","source":"<website name>","note":"<key caveat>"}}',
-        system="Extract structured salary info from web snippets. Return JSON only.",
+        f'"currency":"INR or USD","source":"<website name>","note":"<caveat>"}}\n'
+        f'For USD return salary in THOUSANDS (e.g. 80 for $80k/yr). '
+        f'For INR return in LAKHS (e.g. 12 for 12 LPA). '
+        f'Use location "{location}" — do not substitute another country.',
+        system="Extract structured salary info. Return JSON only.",
         model=MODEL_FAST, max_tokens=400,
     )
     if "error" in r:
@@ -598,28 +674,26 @@ def search_course_links(skill: str) -> List[dict]:
         elif "linkedin.com" in url: plat, icon = "LinkedIn", "💼"
         else:
             continue
-        courses.append({"title": title[:65], "url": url, "platform": plat, "icon": icon, "snippet": body[:120]})
+        courses.append({"title": title[:65], "url": url,
+                         "platform": plat, "icon": icon, "snippet": body[:120]})
     return courses[:4]
 
 
 def search_skill_trends(skills: List[str]) -> Dict[str, str]:
-    """FIX: use MARKET_DEMAND as primary source, web search to upgrade/downgrade."""
-    out = {}
-    for skill in skills:
-        out[skill] = demand_label(skill)
-    # Attempt web search to refine, but don't fail silently on error
+    out = {skill: demand_label(skill) for skill in skills}
     if not skills:
         return out
     try:
-        query   = " ".join(skills[:6])
-        results = ddg_search(f"most in-demand tech skills 2025 hiring india {query}", max_results=5)
+        results = ddg_search(
+            f"most in-demand tech skills 2025 hiring india {' '.join(skills[:6])}",
+            max_results=5,
+        )
         if results:
-            text = " ".join(r.get("body", "") for r in results if _is_english(r.get("body", ""))).lower()
+            text = " ".join(
+                r.get("body", "") for r in results if _is_english(r.get("body", ""))
+            ).lower()
             for skill in skills:
-                count = text.count(skill.lower())
-                # Only upgrade from MARKET_DEMAND base, never downgrade below it
-                base = out[skill]
-                if count >= 3 and base != "🔥 Hot":
+                if text.count(skill.lower()) >= 3 and out[skill] != "🔥 Hot":
                     out[skill] = "🔥 Hot"
     except Exception:
         pass
@@ -630,14 +704,16 @@ def search_job_market(role: str) -> List[str]:
     results = ddg_search(f"{role} job market hiring demand 2025 india", max_results=5)
     if not results:
         return []
-    eng_snippets = [r.get("body", "")[:300] for r in results[:5] if _is_english(r.get("body", ""))]
-    if not eng_snippets:
+    snippets = "\n".join(
+        r.get("body", "")[:300] for r in results[:5] if _is_english(r.get("body", ""))
+    )
+    if not snippets:
         return []
-    snippets = "\n".join(eng_snippets[:4])
     r = _groq_call(
-        f'Based on these search results about "{role}" job market, give 3 short specific insights in English.\n\n'
-        f'{snippets}\n\nReturn JSON: {{"insights":["<insight1>","<insight2>","<insight3>"]}}',
-        system="Job market analyst. Give insights in English only. Return JSON only.",
+        f'Based on these search results about "{role}" job market, '
+        f'give 3 short specific insights in English.\n\n{snippets}\n\n'
+        f'Return JSON: {{"insights":["<insight1>","<insight2>","<insight3>"]}}',
+        system="Job market analyst. English only. Return JSON only.",
         model=MODEL_FAST, max_tokens=300,
     )
     return r.get("insights", []) if "error" not in r else []
@@ -685,7 +761,6 @@ def cache_bust(resume_text: str, resume_img: Optional[str], jd_text: str) -> Non
 #  ANALYSIS ENGINE
 # =============================================================================
 def _normalize_skill(skill: str) -> str:
-    """Normalize a skill name through alias map."""
     sl = (
         skill.lower()
         .replace(".js", "").replace(".ts", "")
@@ -737,29 +812,21 @@ def skill_decay(p: Any, yr: Any) -> Tuple[int, bool]:
 
 
 def _build_candidate_skill_lookup(candidate: dict) -> Dict[str, dict]:
-    """
-    FIX: Build a comprehensive skill lookup from candidate.skills that:
-    - Uses SKILL_ALIASES to normalize keys
-    - Expands MERN Stack to constituent skills
-    - Handles all common variations
-    """
     rs: Dict[str, dict] = {}
     for s in candidate.get("skills", []):
         raw = s["skill"]
         sl  = raw.lower().replace(".js","").replace(".ts","").replace("(","").replace(")","").strip()
-        # direct entry
         rs[sl] = s
-        # alias entry
         alias = SKILL_ALIASES.get(sl)
         if alias:
             rs[alias] = s
-        # MERN expansion
         if "mern" in sl:
             for implied in MERN_IMPLIES:
                 if implied not in rs:
-                    # Create a derived entry — same proficiency, same year
-                    rs[implied] = {**s, "skill": implied, "context": f"Derived from MERN Stack: {s.get('context','')}"}
-        # dot notation cleanup
+                    rs[implied] = {
+                        **s, "skill": implied,
+                        "context": f"Derived from MERN Stack: {s.get('context','')}",
+                    }
         rs[sl.replace(".", "")] = s
     return rs
 
@@ -770,23 +837,16 @@ def analyze_gap(candidate: dict, jd: dict) -> List[dict]:
         [(s, True)  for s in jd.get("required_skills",  [])] +
         [(s, False) for s in jd.get("preferred_skills", [])]
     )
-
-    # FIX: also extract SQL from resume text if missing from skills
-    raw_text_skills = set(rs.keys())
-
     out = []
     for skill, req in all_s:
-        sl_raw   = skill.lower().replace(".js","").replace(".ts","").replace("(","").replace(")","").strip()
-        sl       = SKILL_ALIASES.get(sl_raw, sl_raw)
+        sl_raw = skill.lower().replace(".js","").replace(".ts","").replace("(","").replace(")","").strip()
+        sl     = SKILL_ALIASES.get(sl_raw, sl_raw)
         status, prof, ctx, dec, orig = "Missing", 0, "", False, 0
-
-        # FIX: multi-strategy lookup
         src = (
-            rs.get(sl) or
-            rs.get(sl_raw) or
-            next((v for k, v in rs.items() if sl in k or k in sl or sl_raw in k or k in sl_raw), None)
+            rs.get(sl) or rs.get(sl_raw) or
+            next((v for k, v in rs.items()
+                  if sl in k or k in sl or sl_raw in k or k in sl_raw), None)
         )
-
         if src:
             try:
                 raw_p = int(src.get("proficiency") or 0)
@@ -794,14 +854,8 @@ def analyze_gap(candidate: dict, jd: dict) -> List[dict]:
                 raw_p = 0
             prof, dec = skill_decay(raw_p, src.get("year_last_used") or 0)
             orig      = raw_p
-            ctx       = src.get("context", "")
-            if prof >= 7:
-                status = "Known"
-            elif prof > 0:
-                status = "Partial"
-            else:
-                status = "Missing"  # FIX: 0/10 is not Partial, it's Missing
-
+            ctx       = _strip_mern_prefix(src.get("context", ""))
+            status    = "Known" if prof >= 7 else ("Partial" if prof > 0 else "Missing")
         idx    = _match_skill(skill)
         demand = MARKET_DEMAND.get(sl, MARKET_DEMAND.get(skill.lower(), 1))
         obs    = OBSOLESCENCE_RISK.get(sl)
@@ -833,10 +887,9 @@ def build_path(gp: List[dict], c: dict, jd: Optional[dict] = None) -> List[dict]
     needed:  set  = set()
     id2gap:  dict = {}
 
-    # FIX: Build known proficiency map to skip beginner prereqs for expert skills
     known_prof: Dict[str, int] = {}
     for skill_entry in c.get("skills", []):
-        sl  = skill_entry["skill"].lower()
+        sl   = skill_entry["skill"].lower()
         p, _ = skill_decay(skill_entry.get("proficiency", 0), skill_entry.get("year_last_used", 0))
         known_prof[sl] = p
         alias = SKILL_ALIASES.get(sl)
@@ -849,52 +902,51 @@ def build_path(gp: List[dict], c: dict, jd: Optional[dict] = None) -> List[dict]
         co = g.get("catalog_course")
         if not co:
             continue
-
-        # FIX: skip Beginner courses if candidate already has solid foundation
         candidate_prof = g.get("proficiency", 0)
         if candidate_prof >= 5 and co["level"] == "Beginner":
-            # Find intermediate version instead
             better = next(
                 (cat for cat in CATALOG
                  if cat["skill"].lower() == co["skill"].lower()
                  and cat["level"] == "Intermediate"),
-                None
+                None,
             )
             if better:
                 co = better
-
         needed.add(co["id"])
         id2gap[co["id"]] = g
         try:
             for anc in nx.ancestors(SKILL_GRAPH, co["id"]):
                 ad = CATALOG_BY_ID.get(anc)
-                if ad:
-                    anc_skill_lower = ad["skill"].lower()
-                    cand_p = known_prof.get(anc_skill_lower, 0)
-                    # FIX: skip prereq if candidate proficiency >= 6 for that skill
-                    # This handles WE01(HTML/CSS) and WE02(JS) being pulled in for React
-                    # when candidate already has JavaScript/MERN experience
-                    if cand_p >= 6:
-                        continue
-                    # Also skip if any alias of this skill is known
-                    alias_known = any(
-                        known_prof.get(alias_val, 0) >= 6
-                        for alias_key, alias_val in SKILL_ALIASES.items()
-                        if alias_val == anc_skill_lower or alias_key == anc_skill_lower
-                    )
-                    if alias_known:
-                        continue
-                    if not any(
-                        x["status"] == "Known" and x["skill"].lower() in anc_skill_lower
-                        for x in gp
-                    ):
-                        needed.add(anc)
+                if not ad:
+                    continue
+                anc_sl = ad["skill"].lower()
+                if known_prof.get(anc_sl, 0) >= 6:
+                    continue
+                alias_known = any(
+                    known_prof.get(av, 0) >= 6
+                    for ak, av in SKILL_ALIASES.items()
+                    if av == anc_sl or ak == anc_sl
+                )
+                if alias_known:
+                    continue
+                if not any(x["status"] == "Known" and x["skill"].lower() in anc_sl for x in gp):
+                    needed.add(anc)
         except Exception:
             pass
 
+    # Leadership injection — only for management roles or large seniority gaps
     if jd:
-        sm = seniority_check(c, jd)
-        if sm["add_leadership"]:
+        sm            = seniority_check(c, jd)
+        responsibilities = " ".join(jd.get("key_responsibilities", [])).lower()
+        domain        = jd.get("domain", "Tech")
+        needs_leadership = sm["add_leadership"] and (
+            domain != "Tech"
+            or "team"   in responsibilities
+            or "lead"   in responsibilities
+            or "manag"  in responsibilities
+            or sm["gap_levels"] >= 2
+        )
+        if needs_leadership:
             needed.update(["LD01", "LD02"])
         if sm["add_strategic"]:
             needed.add("LD03")
@@ -905,37 +957,41 @@ def build_path(gp: List[dict], c: dict, jd: Optional[dict] = None) -> List[dict]
     except Exception:
         ordered = list(needed)
 
+    # =========================================================================
+    #  FIX 2 — CRITICAL PATH: required-skill nodes + their ancestors only
+    #  Preferred/leaf nodes with no required descendant are NOT critical.
+    # =========================================================================
     crit: set = set()
     try:
         if sub.nodes:
-            # Required JD skills and their direct course IDs
             required_gap_skills = {g["skill"].lower() for g in gp if g["is_required"]}
-
-            # Assign node scores: required skill node = 10, prereq-only = 1
-            node_score: Dict[str, int] = {}
-            for node in sub.nodes:
-                co = CATALOG_BY_ID.get(node, {})
-                node_score[node] = 10 if co.get("skill","").lower() in required_gap_skills else 1
-
-            # Find longest path by cumulative node score using topological sort + DP
-            topo = list(nx.topological_sort(sub))
-            dp: Dict[str, int]        = {n: node_score.get(n, 1) for n in topo}
-            prev: Dict[str, Optional[str]] = {n: None for n in topo}
-            for node in topo:
-                for succ in sub.successors(node):
-                    candidate_score = dp[node] + node_score.get(succ, 1)
-                    if candidate_score > dp[succ]:
-                        dp[succ] = candidate_score
-                        prev[succ] = node
-
-            # Trace back from highest-score node
-            end = max(dp, key=lambda n: dp[n])
-            path_nodes: set = set()
-            cur: Optional[str] = end
-            while cur is not None:
-                path_nodes.add(cur)
-                cur = prev[cur]
-            crit = path_nodes
+            # Course nodes that directly teach a required JD skill
+            required_course_ids = {
+                node for node in sub.nodes
+                if CATALOG_BY_ID.get(node, {}).get("skill", "").lower() in required_gap_skills
+            }
+            # Mark those + all their prerequisite ancestors
+            for req_id in required_course_ids:
+                crit.add(req_id)
+                try:
+                    crit.update(nx.ancestors(sub, req_id))
+                except Exception:
+                    pass
+            # Remove preferred/leaf nodes that lead to no required skill
+            for nid in list(crit):
+                co_skill = CATALOG_BY_ID.get(nid, {}).get("skill", "").lower()
+                if co_skill in required_gap_skills:
+                    continue
+                try:
+                    descs    = nx.descendants(sub, nid)
+                    has_req  = any(
+                        CATALOG_BY_ID.get(d, {}).get("skill", "").lower() in required_gap_skills
+                        for d in descs
+                    )
+                    if not has_req:
+                        crit.discard(nid)
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -966,19 +1022,32 @@ def build_path(gp: List[dict], c: dict, jd: Optional[dict] = None) -> List[dict]
     return path
 
 
+# =============================================================================
+#  FIX 3 — PROJECTED FIT with completion probability
+# =============================================================================
 def calc_impact(gp: List[dict], path: List[dict]) -> dict:
-    tot     = len(gp)
-    known   = sum(1 for g in gp if g["status"] == "Known")
-    # FIX: only count JD skills covered, not DAG prerequisites
+    tot   = len(gp)
+    known = sum(1 for g in gp if g["status"] == "Known")
     jd_skills_lower = {g["skill"].lower() for g in gp}
     covered = len({
         m["gap_skill"].lower() for m in path
         if m["gap_skill"].lower() in jd_skills_lower
     })
-    rhrs    = sum(int(m.get("duration_hrs") or 0) for m in path)
-    cur     = min(100, round(known / max(tot, 1) * 100))
-    proj    = min(100, round((known + covered) / max(tot, 1) * 100))
-    # FIX: hours saved comparison — only positive if roadmap < 60h
+    rhrs = sum(int(m.get("duration_hrs") or 0) for m in path)
+
+    # Humans rarely complete long self-study roadmaps — reflect that in projection
+    if rhrs <= 40:
+        completion_prob = 0.85
+    elif rhrs <= 80:
+        completion_prob = 0.72
+    else:
+        completion_prob = 0.58
+
+    cur  = min(100, round(known / max(tot, 1) * 100))
+    proj = min(92, round(
+        (known / max(tot, 1) * 100) +
+        (covered / max(tot, 1) * 100 * completion_prob)
+    ))
     hours_saved = max(0, 60 - rhrs)
     return {
         "total_skills":   tot,
@@ -986,7 +1055,7 @@ def calc_impact(gp: List[dict], path: List[dict]) -> dict:
         "gaps_addressed": covered,
         "roadmap_hours":  rhrs,
         "hours_saved":    hours_saved,
-        "roadmap_longer": rhrs > 60,  # FIX: flag when roadmap exceeds generic
+        "roadmap_longer": rhrs > 60,
         "current_fit":    cur,
         "projected_fit":  proj,
         "fit_delta":      proj - cur,
@@ -998,12 +1067,15 @@ def calc_impact(gp: List[dict], path: List[dict]) -> dict:
 
 def interview_readiness(gp: List[dict], c: dict) -> dict:
     rk  = [g for g in gp if g["status"] == "Known"   and g["is_required"]]
-    # FIX: only count Partial if proficiency > 0 (0-prof Partials are effectively Missing for interviews)
-    rp  = [g for g in gp if g["status"] == "Partial"  and g["is_required"] and int(g.get("proficiency") or 0) > 0]
-    rm  = [g for g in gp if (g["status"] == "Missing" or (g["status"] == "Partial" and int(g.get("proficiency") or 0) == 0)) and g["is_required"]]
+    rp  = [g for g in gp if g["status"] == "Partial"  and g["is_required"]
+           and int(g.get("proficiency") or 0) > 0]
+    rm  = [g for g in gp if (
+        g["status"] == "Missing" or
+        (g["status"] == "Partial" and int(g.get("proficiency") or 0) == 0)
+    ) and g["is_required"]]
     tot = max(len(rk) + len(rp) + len(rm), 1)
     adj = {"Junior": 5, "Mid": 0, "Senior": -5, "Lead": -10}.get(c.get("seniority", "Mid"), 0)
-    sc = max(0, min(100, round((len(rk) + len(rp) * 0.4) / tot * 100) + adj))
+    sc  = max(0, min(100, round((len(rk) + len(rp) * 0.4) / tot * 100) + adj))
     if   sc >= 75: v = ("Strong",    "#4ade80", "Ready for most rounds")
     elif sc >= 50: v = ("Moderate",  "#fbbf24", "Pass screening; prep gaps")
     elif sc >= 30: v = ("Weak",      "#fb923c", "Gap work before applying")
@@ -1051,20 +1123,16 @@ def weekly_plan(path: List[dict], hpd: float = 2.0) -> List[dict]:
 
 
 def transfer_map_calc(c: dict, gp: List[dict]) -> List[dict]:
-    # FIX: normalize candidate skills through alias map before lookup
     known: set = set()
     for s in c.get("skills", []):
         if int(s.get("proficiency") or 0) >= 6:
             sl = s["skill"].lower().replace(".js","").replace("(","").replace(")","").strip()
             known.add(sl)
-            # add alias
             alias = SKILL_ALIASES.get(sl)
             if alias:
                 known.add(alias)
-            # MERN expands to react + javascript
             if "mern" in sl:
                 known.update(["react", "javascript", "rest apis"])
-
     out = []
     seen_destinations: set = set()
     for g in gp:
@@ -1117,9 +1185,84 @@ def weeks_ready(hrs: float, hpd: float) -> str:
 
 
 # =============================================================================
+#  FIX 1 — ICS CALENDAR: one session per day, never midnight / 2 AM / 5 AM
+# =============================================================================
+def build_ics_calendar(path: List[dict], hpd: float = 2.0,
+                       start_date: Optional[Any] = None) -> str:
+    from datetime import datetime as dt, timedelta
+
+    if start_date is None:
+        base       = dt.now().replace(hour=19, minute=0, second=0, microsecond=0)
+        days_ahead = (7 - base.weekday()) % 7 or 7   # next Monday
+        start_date = base + timedelta(days=days_ahead)
+
+    try:
+        session_hrs = min(max(float(hpd), 0.5), 2.0)
+    except (TypeError, ValueError):
+        session_hrs = 2.0
+
+    start_hour   = int(start_date.hour)
+    start_minute = int(start_date.minute)
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//SkillForge//AI Adaptive Onboarding//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "X-WR-CALNAME:SkillForge Learning Roadmap",
+        "X-WR-TIMEZONE:Asia/Kolkata",
+    ]
+
+    current_day = start_date.date()
+    uid_counter = 0
+
+    for m in path:
+        total_hrs = int(m.get("duration_hrs") or 0)
+        sessions  = max(1, round(total_hrs / session_hrs))
+        title     = m["title"]
+        skill     = m["skill"]
+        crit_tag  = "  ★" if m.get("is_critical") else ""
+
+        for sess in range(sessions):
+            # Skip weekends
+            while current_day.weekday() >= 5:
+                current_day += timedelta(days=1)
+
+            s_start = dt.combine(
+                current_day,
+                dt.min.time().replace(hour=start_hour, minute=start_minute, second=0),
+            )
+            s_end       = s_start + timedelta(hours=session_hrs)
+            uid_counter += 1
+            dtstamp     = dt.utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+            lines += [
+                "BEGIN:VEVENT",
+                f"UID:skillforge-{uid_counter}@skillforge.ai",
+                f"DTSTAMP:{dtstamp}",
+                f"DTSTART;TZID=Asia/Kolkata:{s_start.strftime('%Y%m%dT%H%M%S')}",
+                f"DTEND;TZID=Asia/Kolkata:{s_end.strftime('%Y%m%dT%H%M%S')}",
+                f"SUMMARY:📚 {title}{crit_tag}",
+                f"DESCRIPTION:Skill: {skill}\\nLevel: {m['level']}"
+                f"\\nSession {sess+1}/{sessions}"
+                f"\\n{(m.get('reasoning') or '')[:100]}",
+                f"CATEGORIES:SkillForge,{skill}",
+                "STATUS:CONFIRMED",
+                "END:VEVENT",
+            ]
+            # KEY FIX: always advance to next day — one session per day, no exceptions
+            current_day += timedelta(days=1)
+
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines)
+
+
+# =============================================================================
 #  FULL PIPELINE
 # =============================================================================
-def run_analysis(resume_text: str, jd_text: str, resume_image_b64: Optional[str] = None) -> dict:
+def run_analysis(resume_text: str, jd_text: str,
+                 resume_image_b64: Optional[str] = None) -> dict:
     if resume_text and resume_text.strip():
         cache_k = "txt:" + hashlib.md5(resume_text.encode()).hexdigest()
     elif resume_image_b64:
@@ -1135,13 +1278,12 @@ def run_analysis(resume_text: str, jd_text: str, resume_image_b64: Optional[str]
     kws            = [w.strip() for w in jd_text.split() if len(w) > 3][:20]
     potential_mods = [
         c for c in CATALOG
-        if any(kw.lower() in c["skill"].lower() or c["skill"].lower() in kw.lower() for kw in kws)
+        if any(kw.lower() in c["skill"].lower() or c["skill"].lower() in kw.lower()
+               for kw in kws)
     ][:10]
 
-    raw = mega_call(
-        resume_text=resume_text, jd_text=jd_text,
-        modules_hint=potential_mods, resume_image_b64=resume_image_b64,
-    )
+    raw = mega_call(resume_text=resume_text, jd_text=jd_text,
+                    modules_hint=potential_mods, resume_image_b64=resume_image_b64)
     if "error" in raw:
         return raw
 
@@ -1153,21 +1295,25 @@ def run_analysis(resume_text: str, jd_text: str, resume_image_b64: Optional[str]
     if not candidate or not jd_data:
         return {"error": "parse_failed — empty candidate or JD"}
 
-    # FIX: sanity check — if expert candidate has 0 known skills, flag
-    yrs = int(candidate.get("years_experience") or 0)
+    yrs          = int(candidate.get("years_experience") or 0)
     skills_count = len(candidate.get("skills", []))
     if skills_count == 0 and yrs > 2:
-        return {"error": "analysis_quality_failure — no skills extracted for experienced candidate. Please try again."}
+        return {"error": "analysis_quality_failure — no skills extracted. Please try again."}
+
+    # FIX 6: Regex fallback — inject any skills the LLM missed
+    if resume_text and resume_text.strip():
+        candidate = _apply_regex_skill_fallback(candidate, resume_text)
 
     gp   = analyze_gap(candidate, jd_data)
     path = build_path(gp, candidate, jd_data)
 
-    # FIX: dedicated reasoning generation — personalized per candidate, not generic fallback
     rsn_map_llm = generate_reasoning(path, candidate, jd_data)
-    # Merge: LLM reasoning wins, fallback to generic only if missing
     for m in path:
-        llm_rsn = rsn_map_llm.get(m["id"]) or rsn_map.get(m["id"])
-        m["reasoning"] = llm_rsn if llm_rsn else f"Addresses gap in {m['gap_skill']} — required for {jd_data.get('role_title', 'the target role')}."
+        llm_rsn    = rsn_map_llm.get(m["id"]) or rsn_map.get(m["id"])
+        m["reasoning"] = (
+            llm_rsn if llm_rsn
+            else f"Addresses gap in {m['gap_skill']} — required for {jd_data.get('role_title','the role')}."
+        )
 
     im  = calc_impact(gp, path)
     sm  = seniority_check(candidate, jd_data)
@@ -1176,7 +1322,8 @@ def run_analysis(resume_text: str, jd_text: str, resume_image_b64: Optional[str]
     tf  = transfer_map_calc(candidate, gp)
     roi = roi_rank(gp, path)
     obs = [
-        {"skill": g["skill"], "status": g["status"], "reason": OBSOLESCENCE_RISK[g["skill"].lower()]}
+        {"skill": g["skill"], "status": g["status"],
+         "reason": OBSOLESCENCE_RISK[g["skill"].lower()]}
         for g in gp if OBSOLESCENCE_RISK.get(g["skill"].lower())
     ]
     cgm = max(
@@ -1195,7 +1342,9 @@ def run_analysis(resume_text: str, jd_text: str, resume_image_b64: Optional[str]
     return result
 
 
-def run_analysis_with_web(resume_text: str, jd_text: str, resume_image_b64: Optional[str] = None, location: str = "India") -> dict:
+def run_analysis_with_web(resume_text: str, jd_text: str,
+                          resume_image_b64: Optional[str] = None,
+                          location: str = "India") -> dict:
     result = run_analysis(resume_text, jd_text, resume_image_b64)
     if "error" in result:
         return result
@@ -1214,46 +1363,63 @@ def run_analysis_with_web(resume_text: str, jd_text: str, resume_image_b64: Opti
 # =============================================================================
 #  PDF EXPORT
 # =============================================================================
-def build_pdf(c: dict, jd: dict, gp: List[dict], path: List[dict], im: dict, ql: Optional[dict] = None, iv: Optional[dict] = None) -> io.BytesIO:
+def build_pdf(c: dict, jd: dict, gp: List[dict], path: List[dict],
+              im: dict, ql: Optional[dict] = None, iv: Optional[dict] = None) -> io.BytesIO:
     buf = io.BytesIO()
     if not REPORTLAB:
         return buf
-    doc    = SimpleDocTemplate(buf, pagesize=letter, topMargin=48, bottomMargin=48, leftMargin=48, rightMargin=48)
+    doc    = SimpleDocTemplate(buf, pagesize=letter,
+                                topMargin=48, bottomMargin=48,
+                                leftMargin=48, rightMargin=48)
     styles = getSampleStyleSheet()
     TEAL   = rl_colors.HexColor("#2dd4bf")
     BD = ParagraphStyle("BD", parent=styles["Normal"],   fontSize=10, spaceAfter=5)
-    H1 = ParagraphStyle("H1", parent=styles["Title"],    fontSize=20, spaceAfter=4, textColor=TEAL)
-    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=13, spaceAfter=6, spaceBefore=14)
-    IT = ParagraphStyle("IT", parent=styles["Normal"],   fontSize=9,  spaceAfter=4, leftIndent=18, textColor=rl_colors.HexColor("#555"))
+    H1 = ParagraphStyle("H1", parent=styles["Title"],    fontSize=20, spaceAfter=4,  textColor=TEAL)
+    H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=13, spaceAfter=6,  spaceBefore=14)
+    IT = ParagraphStyle("IT", parent=styles["Normal"],   fontSize=9,  spaceAfter=4,
+                         leftIndent=18, textColor=rl_colors.HexColor("#555"))
     story = [
         Paragraph("SkillForge — AI Adaptive Onboarding Report", H1),
-        Paragraph(f"Candidate: <b>{c.get('name','--')}</b>  |  Role: <b>{jd.get('role_title','--')}</b>  |  Generated: {datetime.now().strftime('%d %b %Y %H:%M')}", BD),
+        Paragraph(
+            f"Candidate: <b>{c.get('name','--')}</b>  |  "
+            f"Role: <b>{jd.get('role_title','--')}</b>  |  "
+            f"Generated: {datetime.now().strftime('%d %b %Y %H:%M')}", BD),
         Spacer(1, 14),
     ]
     if ql or iv:
         story.append(Paragraph("Scores", H2))
         rows: List[List[str]] = []
         if ql:
-            rows += [["ATS Score", f"{ql.get('ats_score','--')}%"], ["Grade", str(ql.get("overall_grade", "--"))], ["Completeness", f"{ql.get('completeness_score','--')}%"], ["Clarity", f"{ql.get('clarity_score','--')}%"]]
+            rows += [
+                ["ATS Score",    f"{ql.get('ats_score','--')}%"],
+                ["Grade",        str(ql.get("overall_grade", "--"))],
+                ["Completeness", f"{ql.get('completeness_score','--')}%"],
+                ["Clarity",      f"{ql.get('clarity_score','--')}%"],
+            ]
         if iv:
             rows += [
                 ["Interview Ready", f"{iv['score']}% — {iv['label']}"],
                 ["Known skills",    str(iv["req_known"])],
                 ["Partial skills",  str(iv["req_partial"])],
-                ["Missing skills",  str(iv["req_missing"])],  # FIX: was always showing 0
+                ["Missing skills",  str(iv["req_missing"])],
             ]
         t = Table([["Metric", "Value"]] + rows, colWidths=[200, 260])
         t.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), TEAL), ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.white),
-            ("FONTSIZE", (0, 0), (-1, -1), 10), ("GRID", (0, 0), (-1, -1), 0.4, rl_colors.grey),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [rl_colors.whitesmoke, rl_colors.white]),
+            ("BACKGROUND", (0, 0), (-1, 0), TEAL),
+            ("TEXTCOLOR",  (0, 0), (-1, 0), rl_colors.white),
+            ("FONTSIZE",   (0, 0), (-1, -1), 10),
+            ("GRID",       (0, 0), (-1, -1), 0.4, rl_colors.grey),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [rl_colors.whitesmoke, rl_colors.white]),
             ("LEFTPADDING", (0, 0), (-1, -1), 8),
         ]))
         story += [t, Spacer(1, 14)]
     story.append(Paragraph("Learning Roadmap", H2))
     for i, m in enumerate(path):
         crit_label = "[CRITICAL] " if m.get("is_critical") else ""
-        story.append(Paragraph(f"<b>{i+1}. {crit_label}{m['title']}</b> — {m['level']} / {m['duration_hrs']}h", BD))
+        story.append(Paragraph(
+            f"<b>{i+1}. {crit_label}{m['title']}</b>"
+            f" — {m['level']} / {m['duration_hrs']}h", BD))
         if m.get("reasoning"):
             story.append(Paragraph(f"→ {m['reasoning']}", IT))
     doc.build(story)
@@ -1274,44 +1440,107 @@ _FONT  = dict(color="#94a3b8", family="'DM Mono', 'IBM Plex Mono', monospace")
 
 
 def _bl(**kw) -> dict:
-    return dict(paper_bgcolor=_BG, plot_bgcolor=_BG, font=_FONT, margin=dict(l=8, r=8, t=8, b=36), **kw)
-
-
-def radar_chart(gp: List[dict]) -> go.Figure:
-    items = [g for g in gp if g["is_required"]][:10] or gp[:10]
-    if not items:
-        return go.Figure()
-    # FIX: if all current scores are 0, switch to bar chart for readability
-    all_zero = all(int(g.get("proficiency") or 0) == 0 for g in items)
-    if all_zero or len([g for g in items if int(g.get("proficiency") or 0) > 0]) < 2:
-        return _gap_bar_chart(gp)
-    theta = [g["skill"][:14] for g in items]
-    fig   = go.Figure(data=[
-        go.Scatterpolar(r=[10] * len(items), theta=theta, fill="toself", name="Required", line=dict(color=_RED, width=1), opacity=0.08),
-        go.Scatterpolar(r=[int(g.get("proficiency") or 0) for g in items], theta=theta, fill="toself", name="Current", line=dict(color=_TEAL, width=2.5), opacity=0.7),
-    ])
-    fig.update_layout(
-        **_bl(height=320),
-        polar=dict(bgcolor=_BG, radialaxis=dict(visible=True, range=[0, 10], gridcolor=_GRID, tickfont=dict(size=9, color="#475569")), angularaxis=dict(gridcolor=_GRID, tickfont=dict(size=11))),
-        showlegend=True, legend=dict(bgcolor=_BG, x=0.72, y=1.22, font=dict(size=10)),
-    )
-    return fig
+    return dict(paper_bgcolor=_BG, plot_bgcolor=_BG, font=_FONT,
+                margin=dict(l=8, r=8, t=8, b=36), **kw)
 
 
 def _gap_bar_chart(gp: List[dict]) -> go.Figure:
-    """FIX: fallback when radar would be near-empty — show horizontal bar gap chart."""
-    items = [g for g in gp if g["is_required"]][:8] or gp[:8]
-    skills = [g["skill"][:16] for g in items]
-    current = [int(g.get("proficiency") or 0) for g in items]
+    items    = [g for g in gp if g["is_required"]][:8] or gp[:8]
+    skills   = [g["skill"][:16] for g in items]
+    current  = [int(g.get("proficiency") or 0) for g in items]
     required = [10] * len(items)
     fig = go.Figure()
-    fig.add_trace(go.Bar(name="Required", y=skills, x=required, orientation="h", marker_color=_RED, opacity=0.15))
-    fig.add_trace(go.Bar(name="Current", y=skills, x=current, orientation="h", marker_color=_TEAL, opacity=0.85))
+    fig.add_trace(go.Bar(name="Required", y=skills, x=required, orientation="h",
+                         marker_color=_RED,  opacity=0.15))
+    fig.add_trace(go.Bar(name="Current",  y=skills, x=current,  orientation="h",
+                         marker_color=_TEAL, opacity=0.85))
     fig.update_layout(
         **_bl(height=320), barmode="overlay",
         xaxis=dict(range=[0, 10], gridcolor=_GRID, tickfont=dict(size=10)),
         yaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(size=10), autorange="reversed"),
         legend=dict(bgcolor=_BG, orientation="h", y=1.1, font=dict(size=10)),
+    )
+    return fig
+
+
+def radar_chart(gp: List[dict]) -> go.Figure:
+    items    = [g for g in gp if g["is_required"]][:10] or gp[:10]
+    if not items:
+        return go.Figure()
+    all_zero = all(int(g.get("proficiency") or 0) == 0 for g in items)
+    if all_zero or len([g for g in items if int(g.get("proficiency") or 0) > 0]) < 2:
+        return _gap_bar_chart(gp)
+    theta = [g["skill"][:14] for g in items]
+    fig   = go.Figure(data=[
+        go.Scatterpolar(r=[10]*len(items), theta=theta, fill="toself",
+                        name="Required", line=dict(color=_RED, width=1), opacity=0.08),
+        go.Scatterpolar(r=[int(g.get("proficiency") or 0) for g in items], theta=theta,
+                        fill="toself", name="Current",
+                        line=dict(color=_TEAL, width=2.5), opacity=0.7),
+    ])
+    fig.update_layout(
+        **_bl(height=320),
+        polar=dict(
+            bgcolor=_BG,
+            radialaxis=dict(visible=True, range=[0,10], gridcolor=_GRID,
+                            tickfont=dict(size=9, color="#475569")),
+            angularaxis=dict(gridcolor=_GRID, tickfont=dict(size=11)),
+        ),
+        showlegend=True, legend=dict(bgcolor=_BG, x=0.72, y=1.22, font=dict(size=10)),
+    )
+    return fig
+
+
+def animated_radar_chart(gp: List[dict]) -> go.Figure:
+    items    = [g for g in gp if g["is_required"]][:10] or gp[:10]
+    if not items:
+        return go.Figure()
+    all_zero = all(int(g.get("proficiency") or 0) == 0 for g in items)
+    if all_zero or len([g for g in items if int(g.get("proficiency") or 0) > 0]) < 2:
+        return _gap_bar_chart(gp)
+    theta  = [g["skill"][:14] for g in items]
+    target = [int(g.get("proficiency") or 0) for g in items]
+    frames = []
+    for step in range(13):
+        frac   = step / 12
+        t_ease = 1 - (1 - frac) ** 3
+        frames.append(go.Frame(
+            data=[
+                go.Scatterpolar(r=[10]*len(items), theta=theta, fill="toself",
+                                name="Required", line=dict(color=_RED, width=1), opacity=0.08),
+                go.Scatterpolar(r=[round(v * t_ease, 1) for v in target], theta=theta,
+                                fill="toself", name="Current",
+                                line=dict(color=_TEAL, width=2.5), opacity=0.8),
+            ],
+            name=str(step),
+        ))
+    fig = go.Figure(
+        data=[
+            go.Scatterpolar(r=[10]*len(items), theta=theta, fill="toself",
+                            name="Required", line=dict(color=_RED, width=1), opacity=0.08),
+            go.Scatterpolar(r=[0]*len(items), theta=theta, fill="toself",
+                            name="Current", line=dict(color=_TEAL, width=2.5), opacity=0.8),
+        ],
+        frames=frames,
+        layout=go.Layout(
+            **_bl(height=320),
+            polar=dict(
+                bgcolor=_BG,
+                radialaxis=dict(visible=True, range=[0,10], gridcolor=_GRID,
+                                tickfont=dict(size=9, color="#475569")),
+                angularaxis=dict(gridcolor=_GRID, tickfont=dict(size=11)),
+            ),
+            showlegend=True, legend=dict(bgcolor=_BG, x=0.72, y=1.22, font=dict(size=10)),
+            updatemenus=[dict(
+                type="buttons", showactive=False, y=1.28, x=0.58, xanchor="left",
+                buttons=[dict(
+                    label="▶ Animate",
+                    method="animate",
+                    args=[None, {"frame": {"duration": 60, "redraw": True},
+                                 "fromcurrent": True, "transition": {"duration": 0}}],
+                )],
+            )],
+        ),
     )
     return fig
 
@@ -1336,7 +1565,8 @@ def timeline_chart(path: List[dict]) -> go.Figure:
         **_bl(height=max(260, len(path) * 38)),
         xaxis=dict(title="Hours", gridcolor=_GRID, zeroline=False, tickfont=dict(size=11)),
         yaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(size=11), autorange="reversed"),
-        legend=dict(bgcolor=_BG, orientation="h", y=1.05, font=dict(size=11)), barmode="overlay",
+        legend=dict(bgcolor=_BG, orientation="h", y=1.05, font=dict(size=11)),
+        barmode="overlay",
     )
     return fig
 
@@ -1357,10 +1587,12 @@ def salary_chart(s: dict) -> go.Figure:
         except (TypeError, ValueError):
             return 0.0
 
-    vals = [_n(s.get("min_lpa")), _n(s.get("median_lpa")), _n(s.get("max_lpa"))]
-    curr = s.get("currency", "INR")
-    sym  = "₹" if curr == "INR" else "$"
-    unit = "L/yr" if curr == "INR" else "k/yr"
+    curr      = s.get("currency", "INR")
+    sym       = "₹" if curr == "INR" else "$"
+    unit      = "L/yr" if curr == "INR" else "k/yr"
+    raw_vals  = [_n(s.get("min_lpa")), _n(s.get("median_lpa")), _n(s.get("max_lpa"))]
+    # FIX: if USD values look like full dollar amounts (> 500), convert to thousands
+    vals = [round(v / 1000, 1) for v in raw_vals] if (curr == "USD" and any(v > 500 for v in raw_vals)) else raw_vals
     lbls = [f"{sym}{v}{unit}" for v in vals]
     fig  = go.Figure(go.Bar(
         x=["Min", "Median", "Max"], y=vals,
@@ -1382,7 +1614,8 @@ def roi_bar(roi_list: List[dict]) -> go.Figure:
     top = roi_list[:10]
     fig = go.Figure(go.Bar(
         x=[m["roi"] for m in top], y=[m["title"][:28] for m in top], orientation="h",
-        marker=dict(color=[_RED if m["is_required"] else _TEAL for m in top], opacity=0.85, line=dict(width=0)),
+        marker=dict(color=[_RED if m["is_required"] else _TEAL for m in top],
+                    opacity=0.85, line=dict(width=0)),
         hovertemplate="<b>%{y}</b><br>ROI Index: %{x}<extra></extra>",
     ))
     fig.update_layout(
@@ -1393,18 +1626,12 @@ def roi_bar(roi_list: List[dict]) -> go.Figure:
     return fig
 
 
-# =============================================================================
-#  3D DAG — build JavaScript-ready graph data from path
-# =============================================================================
 def build_dag_data(path: List[dict], gp: List[dict]) -> dict:
-    """Convert path + catalog graph into nodes/edges for the 3D DAG visualization."""
     path_ids   = {m["id"] for m in path}
     req_skills = {g["skill"].lower() for g in gp if g["is_required"]}
     crit_ids   = {m["id"] for m in path if m.get("is_critical")}
-
-    nodes = []
-    for m in path:
-        nodes.append({
+    nodes = [
+        {
             "id":       m["id"],
             "label":    m["title"][:22],
             "skill":    m["skill"],
@@ -1412,186 +1639,52 @@ def build_dag_data(path: List[dict], gp: List[dict]) -> dict:
             "required": m.get("is_required", False) or m["skill"].lower() in req_skills,
             "critical": m["id"] in crit_ids,
             "hrs":      int(m.get("duration_hrs") or 0),
-        })
-
-    # Only include edges where both src and dst are in the path
-    edges = []
-    for m in path:
-        for prereq_id in (m.get("prereqs") or []):
-            if prereq_id in path_ids:
-                edges.append({"src": prereq_id, "dst": m["id"]})
-
+        }
+        for m in path
+    ]
+    edges = [
+        {"src": prereq_id, "dst": m["id"]}
+        for m in path
+        for prereq_id in (m.get("prereqs") or [])
+        if prereq_id in path_ids
+    ]
     return {"nodes": nodes, "edges": edges}
 
 
-def animated_radar_chart(gp: List[dict]) -> go.Figure:
-    """Radar chart that animates from 0 to current proficiency on load."""
-    items = [g for g in gp if g["is_required"]][:10] or gp[:10]
-    if not items:
-        return go.Figure()
-
-    all_zero = all(int(g.get("proficiency") or 0) == 0 for g in items)
-    if all_zero or len([g for g in items if int(g.get("proficiency") or 0) > 0]) < 2:
-        return _gap_bar_chart(gp)
-
-    theta  = [g["skill"][:14] for g in items]
-    target = [int(g.get("proficiency") or 0) for g in items]
-
-    # Build animation frames: 0 → target in 12 steps
-    frames = []
-    steps  = 12
-    for step in range(steps + 1):
-        frac = step / steps
-        # ease-out cubic
-        t_ease = 1 - (1 - frac) ** 3
-        r_vals = [round(v * t_ease, 1) for v in target]
-        frames.append(go.Frame(
-            data=[
-                go.Scatterpolar(r=[10]*len(items), theta=theta, fill="toself",
-                                name="Required", line=dict(color=_RED, width=1), opacity=0.08),
-                go.Scatterpolar(r=r_vals, theta=theta, fill="toself",
-                                name="Current", line=dict(color=_TEAL, width=2.5), opacity=0.8),
-            ],
-            name=str(step)
-        ))
-
-    fig = go.Figure(
-        data=[
-            go.Scatterpolar(r=[10]*len(items), theta=theta, fill="toself",
-                            name="Required", line=dict(color=_RED, width=1), opacity=0.08),
-            go.Scatterpolar(r=[0]*len(items), theta=theta, fill="toself",
-                            name="Current", line=dict(color=_TEAL, width=2.5), opacity=0.8),
-        ],
-        frames=frames,
-        layout=go.Layout(
-            **_bl(height=320),
-            polar=dict(
-                bgcolor=_BG,
-                radialaxis=dict(visible=True, range=[0,10], gridcolor=_GRID,
-                                tickfont=dict(size=9, color="#475569")),
-                angularaxis=dict(gridcolor=_GRID, tickfont=dict(size=11)),
-            ),
-            showlegend=True,
-            legend=dict(bgcolor=_BG, x=0.72, y=1.22, font=dict(size=10)),
-            updatemenus=[dict(
-                type="buttons", showactive=False, y=1.28, x=0.58,
-                xanchor="left",
-                buttons=[dict(
-                    label="▶ Animate",
-                    method="animate",
-                    args=[None, {"frame": {"duration": 60, "redraw": True},
-                                 "fromcurrent": True, "transition": {"duration": 0}}]
-                )]
-            )],
-        )
-    )
-    return fig
-
-
+# =============================================================================
+#  INTERVIEW QUESTIONS — seniority-calibrated
+# =============================================================================
 def generate_interview_questions(gp: List[dict], candidate: dict, jd: dict) -> Dict[str, List[str]]:
-    """
-    Generate 3 targeted interview questions per Known/Partial skill.
-    Returns dict of skill → [q1, q2, q3]
-    """
     if not GROQ_CLIENT:
         return {}
-
-    relevant = [g for g in gp if g["status"] in ("Known","Partial") and g["is_required"]][:5]
+    relevant = [g for g in gp if g["status"] in ("Known", "Partial") and g["is_required"]][:5]
     if not relevant:
         return {}
-
-    role    = jd.get("role_title","the role")
-    cname   = candidate.get("name","the candidate")
+    role      = jd.get("role_title", "the role")
+    cname     = candidate.get("name", "the candidate")
+    seniority = candidate.get("seniority", "Junior")
+    years_exp = int(candidate.get("years_experience") or 0)
     skills_list = "\n".join(
-        f"- {g['skill']} (proficiency {g['proficiency']}/10, status: {g['status']}): {g.get('context','')}"
+        f"- {g['skill']} ({g['proficiency']}/10, {g['status']}): "
+        f"{_strip_mern_prefix(g.get('context',''))}"
         for g in relevant
     )
-
     prompt = (
-        f"You are a senior technical interviewer at a top tech company.\n"
-        f"Candidate: {cname}. Target role: {role}.\n\n"
-        f"For each skill below, write exactly 3 interview questions that:\n"
-        f"1. Test real depth, not just definitions\n"
-        f"2. Are realistic for the stated proficiency level\n"
-        f"3. Are specific to the candidate's context where possible\n\n"
+        f"You are a senior technical interviewer.\n"
+        f"Candidate: {cname}. Seniority: {seniority} ({years_exp} years exp). "
+        f"Target role: {role}.\n\n"
+        f"IMPORTANT: Generate questions appropriate for a {seniority}-level engineer ONLY.\n"
+        f"- Junior (0-3yr): practical implementation, debugging, basic design\n"
+        f"- Mid (3-6yr): system design basics, code quality, trade-offs\n"
+        f"- Senior (6+yr): architecture, scale, technical leadership\n"
+        f"Do NOT generate Lead/Principal/Staff level questions for {seniority} candidates.\n\n"
+        f"For each skill write exactly 3 questions that test real depth at {seniority} level.\n\n"
         f"Skills:\n{skills_list}\n\n"
         f"Return JSON: {{\"questions\": {{\"<skill>\": [\"<q1>\",\"<q2>\",\"<q3>\"], ...}}}}"
     )
     r = _groq_call(
         prompt=prompt,
-        system="Expert technical interviewer. Write realistic, depth-testing interview questions. Return JSON only.",
+        system=f"Expert technical interviewer for {seniority}-level engineers. Return JSON only.",
         model=MODEL_FAST, max_tokens=1000,
     )
     return r.get("questions", {}) if "error" not in r else {}
-
-
-def build_ics_calendar(path: List[dict], hpd: float = 2.0, start_date: Optional[Any] = None) -> str:
-    """
-    Generate an .ics calendar file from the weekly study plan.
-    Each module becomes a calendar event scheduled at 2h/day blocks.
-    """
-    from datetime import datetime as dt, timedelta
-    if start_date is None:
-        start_date = dt.now().replace(hour=19, minute=0, second=0, microsecond=0)
-        # Start next Monday
-        days_ahead = 7 - start_date.weekday()
-        start_date = start_date + timedelta(days=days_ahead)
-
-    try:
-        hpd = max(float(hpd), 0.5)
-    except (TypeError, ValueError):
-        hpd = 2.0
-
-    lines = [
-        "BEGIN:VCALENDAR",
-        "VERSION:2.0",
-        "PRODID:-//SkillForge//AI Adaptive Onboarding//EN",
-        "CALSCALE:GREGORIAN",
-        "METHOD:PUBLISH",
-        "X-WR-CALNAME:SkillForge Learning Roadmap",
-        "X-WR-TIMEZONE:Asia/Kolkata",
-    ]
-
-    current_dt = start_date
-    session_hrs = min(hpd, 2.0)  # max 2h sessions
-    uid_counter = 0
-
-    for m in path:
-        total_hrs = int(m.get("duration_hrs") or 0)
-        sessions  = max(1, round(total_hrs / session_hrs))
-        title     = m["title"]
-        skill     = m["skill"]
-        crit_tag  = " ★" if m.get("is_critical") else ""
-
-        for sess in range(sessions):
-            # Skip weekends
-            while current_dt.weekday() >= 5:
-                current_dt += timedelta(days=1)
-
-            dtstart = current_dt.strftime("%Y%m%dT%H%M%S")
-            dtend   = (current_dt + timedelta(hours=session_hrs)).strftime("%Y%m%dT%H%M%S")
-            uid_counter += 1
-            dtstamp = dt.now().strftime("%Y%m%dT%H%M%SZ")
-
-            lines += [
-                "BEGIN:VEVENT",
-                f"UID:skillforge-{uid_counter}@skillforge.ai",
-                f"DTSTAMP:{dtstamp}",
-                f"DTSTART;TZID=Asia/Kolkata:{dtstart}",
-                f"DTEND;TZID=Asia/Kolkata:{dtend}",
-                f"SUMMARY:📚 {title}{crit_tag}",
-                f"DESCRIPTION:Skill: {skill}\\nLevel: {m['level']}\\nSession {sess+1}/{sessions}\\n{m.get('reasoning','')[:100]}",
-                f"CATEGORIES:SkillForge,{skill}",
-                "STATUS:CONFIRMED",
-                "END:VEVENT",
-            ]
-            # Next session: same day if time permits, else next day
-            next_dt = current_dt + timedelta(hours=session_hrs + 0.5)
-            if next_dt.hour >= 22:
-                current_dt = (current_dt + timedelta(days=1)).replace(
-                    hour=int(start_date.hour), minute=0)
-            else:
-                current_dt = next_dt
-
-    lines.append("END:VCALENDAR")
-    return "\r\n".join(lines)
